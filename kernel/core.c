@@ -246,6 +246,11 @@ static void input(char *s, u32 cap) {
   u32 n = 0;
   for (;;) {
     char c = key();
+    if (c != 1 && menu_visible) {
+      graphics_menu_hide();
+      if (c == 27)
+        continue;
+    }
     if (c == 1) {
       /* A click never discards a partially typed command or draft line. */
       if (n)
@@ -416,6 +421,7 @@ fail:
   return 0;
 }
 #include "ai/interface.h"
+#include "power.h"
 static void home(void) {
   screen("HOME  /  What would you like to do?");
   color = 0xf3;
@@ -466,10 +472,37 @@ static void author(void) {
   color = 0xf0;
   line(":save  :read  :undo  :home  /  prefix ':' text with '::' to write it");
   line("Lines remain in RAM until :save. :home saves before leaving.");
+  line(":boot restarts / :die asks before shutdown / :menu opens NIX menu");
   line("");
 }
 #include "ghost/shell.h"
 static const char *mouse_action(int x, int y) {
+  if (power_pending)
+    return (const char *)0;
+  if (x >= 28 && x < 126 && y >= 700 && y < 744) {
+    graphics_menu_toggle();
+    return (const char *)0;
+  }
+  if (menu_visible) {
+    if (x >= 29 && x < 331 && y >= 486 && y < 674) {
+      int item = (y - 486) / 36;
+      graphics_menu_hide();
+      if (item == 0)
+        return selected >= 0 ? ":home" : ghost_open ? "exit" : "home";
+      if (item == 1)
+        return selected >= 0 ? ":memories" : "show my memories";
+      if (item == 2)
+        return selected >= 0 ? ":terminal"
+               : ghost_open  ? "clear"
+                             : "open terminal";
+      if (item == 3)
+        return selected >= 0 ? ":boot" : "boot";
+      if (item == 4)
+        return selected >= 0 ? ":die" : "die";
+    }
+    graphics_menu_hide();
+    return (const char *)0;
+  }
   if (y >= 32 && y < 74) {
     if (x >= 950 && x < 995)
       return selected >= 0 ? ":home" : ghost_open ? "exit" : "home";
@@ -497,6 +530,54 @@ static void execute(char *s) {
   for (u32 i = 0; lower[i]; i++)
     if (lower[i] >= 'A' && lower[i] <= 'Z')
       lower[i] += 32;
+  if (power_pending) {
+    if (eq(lower, "y") || eq(lower, "yes")) {
+      power_pending = 0;
+      power_off();
+      return;
+    }
+    if (!*lower || eq(lower, "n") || eq(lower, "no")) {
+      power_pending = 0;
+      line("Shutdown cancelled.");
+      return;
+    }
+    line("Please answer y or n. NIX is still running.");
+    return;
+  }
+  if ((selected < 0 && (eq(lower, "die") || eq(lower, "shutdown"))) ||
+      eq(lower, ":die")) {
+    power_request();
+    return;
+  }
+  if ((selected < 0 && eq(lower, "boot")) || eq(lower, ":boot")) {
+    power_boot();
+    return;
+  }
+  if ((selected < 0 && eq(lower, "menu")) || eq(lower, ":menu")) {
+    graphics_menu_toggle();
+    return;
+  }
+  if ((selected < 0 && eq(lower, "show my memories")) ||
+      eq(lower, ":memories")) {
+    if (dirty && !save()) {
+      line("Save failed. Your draft remains in Author.");
+      return;
+    }
+    selected = -1;
+    ghost_open = 0;
+    memories();
+    return;
+  }
+  if (eq(lower, ":terminal")) {
+    if (dirty && !save()) {
+      line("Save failed. Your draft remains in Author.");
+      return;
+    }
+    selected = -1;
+    ghost_open = 1;
+    ghost_screen();
+    return;
+  }
   if (ghost_open) {
     ghost_execute(s);
     return;
@@ -574,7 +655,7 @@ static void execute(char *s) {
   }
   if (eq(lower, "help")) {
     line("Intent examples: write a book / write a book called <title>");
-    line("open <title> / show my memories / home / status / shutdown");
+    line("open <title> / show my memories / home / status / menu / boot / die");
     line("Author: :save, :read, :undo, :home. Four books, 4095 bytes each.");
     line("Ask in plain language or use ask <question>. ai status shows the "
          "model.");
@@ -597,12 +678,6 @@ static void execute(char *s) {
                   : "Deterministic mode. Load a model boot bundle to enable "
                     "local AI.");
     return;
-  }
-  if (eq(lower, "shutdown")) {
-    line("Goodbye. All committed Memories remain on your virtual disk.");
-    outw(0x604, 0x2000);
-    for (;;)
-      __asm__ volatile("hlt");
   }
   if (starts(lower, "open ")) {
     for (u32 i = 0; i < store.count; i++) {
@@ -677,15 +752,24 @@ void kernel_main(u32 magic, u32 info) {
     for (;;)
       __asm__ volatile("hlt");
   }
-  if (graphics_init())
+  if (graphics_init()) {
     vga = shadow;
+    graphics_splash();
+  }
+  const char *boot_marker = "NIX_BOOT_SPLASH\n";
+  while (*boot_marker)
+    serial(*boot_marker++);
   load();
   ai_boot(info);
+  boot_pause();
   home();
   mouse_init();
   for (;;) {
     color = 0xf3;
-    say(selected >= 0 ? "  + " : ghost_open ? "ghost /memories > " : "nix > ");
+    say(power_pending   ? "[y/n] > "
+        : selected >= 0 ? "  + "
+        : ghost_open    ? "ghost /memories > "
+                        : "nix > ");
     color = 0xf0;
     char command[256];
     input(command, sizeof(command));

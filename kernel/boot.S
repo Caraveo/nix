@@ -23,6 +23,14 @@ _start:
  or $0x600, %ecx
  mov %ecx, %cr4
  fninit
+ # Clear all runtime state on every boot, including firmware-driven resets.
+ mov %eax, %esi
+ mov $__bss_start, %edi
+ mov $__bss_end, %ecx
+ sub %edi, %ecx
+ xor %eax, %eax
+ rep stosb
+ mov %esi, %eax
  mov $stack_top, %esp
  xor %ebp, %ebp
  sub $8, %esp

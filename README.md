@@ -49,8 +49,9 @@ loaded model. Escape cancels generation. The launcher attaches the verified
 132 MiB model boot module automatically when present; the guest has no network
 device and needs no host model server or API key.
 
-**Prebuilt package:** `make package` produces a ZIP containing the kernel, model,
-licenses, and launch scripts. From a fresh source checkout, prepare the model once:
+[Download the model-included Core 0.2 release](https://github.com/Caraveo/nix/releases/tag/v0.2).
+For the latest source changes, `make package` produces a ZIP containing the kernel,
+model, licenses, and launch scripts. From a fresh source checkout, prepare the model once:
 
 ```sh
 ./scripts/setup-model.sh
@@ -82,11 +83,39 @@ brew install qemu lld
 
 Run these commands from this repository. You can also double-click `Run-NIX.command` after installing dependencies. The first run builds `build/core.elf` and creates a **4 MiB** `build/memories.img`. Later runs preserve that disk. QEMU uses software emulation (TCG) for reliable protected-mode boot; no HVF or nested virtualization is required. The virtual machine has 512 MiB RAM and no network device. The bundled model is loaded as an immutable Multiboot module, separate from the persistent Memories disk.
 
-Click inside QEMU to type. Release captured input with **Control + Option + G** (QEMU's macOS grab shortcut), or close its window to quit. Use `shutdown` from NIX Home for a clean exit. For a serial session in your Mac terminal:
+Click inside QEMU to type. Release captured input with **Control + Option + G** (QEMU's macOS grab shortcut), or close its window to quit. Use `die` (or its `shutdown` alias) and confirm with `y` for a clean exit. `n` cancels. Use `boot` to restart the guest. For a serial session in your Mac terminal:
 
 ```sh
 ./scripts/run.sh --headless
 ```
+
+## NIX emblem, system menu, and power commands
+
+![Black NIX emblem centered during boot](docs/screenshots/boot.png)
+
+Core embeds the alpha mask from your original black `assets/brand/NIX.png` logo.
+It appears large and centered during boot, then as a small button at the bottom
+left of the interface. Click the emblem to open the NIX menu, or type `menu`.
+The menu opens Home, Memories, or Ghost, and offers Restart and Shut down.
+
+![Bottom-left NIX system menu](docs/screenshots/menu.png)
+
+| Command | Behavior |
+| --- | --- |
+| `die` | Shows a caution and a y/n prompt. `y` saves a dirty Author draft, flushes storage, and powers off. `n` or an empty answer cancels. Other answers leave the confirmation pending. |
+| `shutdown` | Alias of `die`, with the same confirmation. |
+| `boot` | Saves a dirty draft, flushes storage, and resets the guest. Boot splash, model, and saved Memories are loaded again. |
+| `menu` | Opens or closes the bottom-left NIX menu. |
+
+In Author, use `:die`, `:boot`, or `:menu` so ordinary manuscript words remain
+text. The menu handles those context differences for you. A failed draft save
+or disk flush cancels the power transition and leaves the OS running. A shutdown
+request stops any remaining commands in that Ghost command chain.
+
+The splash is briefly visible on every cold boot and restart. Generated logo
+masks are compiled into the kernel; no image viewer, filesystem, or model is
+needed to display them. `scripts/generate_logo.py` regenerates the masks with
+Pillow while leaving the original artwork unchanged.
 
 ## Try the first experience
 
@@ -161,6 +190,7 @@ Two alternating 34-sector banks hold complete Memory snapshots. A save writes an
 ```sh
 ./scripts/build.sh
 python3 tests/smoke.py
+python3 tests/power.py
 ```
 
 The renderer directly configures QEMU Standard VGA through the Bochs VBE interface at 1024x768, discovers the framebuffer through PCI, and draws a software cursor. The antialiased Hack glyph atlas is embedded in `kernel/font.h`, with the font and license retained in `third_party/hack`. `scripts/generate_font.py` regenerates it with Pillow; ordinary builds need no Pillow dependency.

@@ -7,6 +7,7 @@ headless:
 	./scripts/run.sh --headless
 test:
 	python3 tests/smoke.py
+	python3 tests/power.py
 export:
 	python3 scripts/memory.py export build/memories.img --output exports
 

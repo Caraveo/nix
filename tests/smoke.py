@@ -16,7 +16,7 @@ from memory import BANK_SIZE, decode, read_disk
 
 
 class VM:
-    def __init__(self, disk, work, model=None):
+    def __init__(self, disk, work, model=None, capture_boot=None):
         self.qmp_path = str(work / 'qmp.sock')
         Path(self.qmp_path).unlink(missing_ok=True)
         drive = ['-drive', f'file={disk},format=raw,if=ide,index=0'] if disk else []
@@ -27,15 +27,23 @@ class VM:
             *drive, *model_args,
             '-nic', 'none', '-display', 'none', '-serial', 'stdio',
             '-monitor', 'none', '-qmp', f'unix:{self.qmp_path},server=on,wait=off',
-            '-no-reboot'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            ], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE)
         self.output = b''
-        self.expect('nix > ')
         self.qmp = socket.socket(socket.AF_UNIX)
-        self.qmp.connect(self.qmp_path)
+        deadline=time.monotonic()+10
+        while True:
+            try:self.qmp.connect(self.qmp_path);break
+            except (FileNotFoundError,ConnectionRefusedError):
+                if time.monotonic()>deadline:raise
+                time.sleep(.01)
         self.stream = self.qmp.makefile('rb')
         self.stream.readline()
         self.command('qmp_capabilities')
+        if capture_boot:
+            self.expect('NIX_BOOT_SPLASH')
+            self.command('screendump',{'filename':str(capture_boot)})
+        self.expect('nix > ')
 
     def command(self, command, arguments=None):
         request = {'execute': command}
@@ -179,7 +187,8 @@ def main():
             assert b'This is the second committed line.' in content
             assert b'Terminal append' not in content
             vm.send(':home', 'nix > ')
-            vm.send('shutdown', 'Goodbye.')
+            vm.send('shutdown', '[y/n] > ')
+            vm.send('y', 'Goodbye.')
             vm.process.wait(timeout=5)
             assert vm.process.returncode == 0
         finally:

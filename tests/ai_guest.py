@@ -33,6 +33,10 @@ with tempfile.TemporaryDirectory(prefix='nix-ai-') as tmp:
         vm.send('write a book called AI Test','  + ')
         vm.send('The deterministic editor still works.','  + ')
         vm.send(':save','Saved and verified on disk.')
-        print('PASS: inference cancels; deterministic Author and saves remain usable',flush=True)
+        vm.expect('  + ')
+        vm.send(':boot','Restarting NIX.')
+        vm.expect('NIX_BOOT_SPLASH');vm.expect('nix > ')
+        vm.send('ai status','SmolLM2-135M-Instruct / Q8')
+        print('PASS: inference cancels; Author saves work; model reloads after actual guest reboot',flush=True)
     finally:
         vm.close()

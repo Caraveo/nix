@@ -1,5 +1,8 @@
 /* QEMU Standard VGA / Bochs VBE framebuffer. No host GUI dependency. */
 #include "font.h"
+#include "logo.h"
+static int menu_visible = 0;
+static u32 menu_under[304 * 256];
 static volatile u32 *pixels;
 /* Retain the scene beneath the software pointer, including while text redraws.
  */
@@ -107,6 +110,53 @@ static void label(int x, int y, const char *s, u32 fg, u32 bg) {
   for (; *s; s++, x += 12)
     glyph(x, y, *s, fg, bg);
 }
+static void draw_logo(int x, int y, const u8 *alpha, int w, int h,
+                      u32 background) {
+  for (int j = 0; j < h; j++)
+    for (int i = 0; i < w; i++) {
+      u8 a = alpha[j * w + i];
+      if (a)
+        rect(x + i, y + j, 1, 1, blend(0, background, a));
+    }
+}
+static void graphics_splash(void) {
+  if (!pixels)
+    return;
+  rect(0, 0, 1024, 768, palette[15]);
+  draw_logo((1024 - NIX_BOOT_W) / 2, (768 - NIX_BOOT_H) / 2, nix_boot_alpha,
+            NIX_BOOT_W, NIX_BOOT_H, palette[15]);
+  label(368, 604, "STARTING NIX / CORE 0.2", palette[0], palette[15]);
+  rect(392, 650, 240, 3, palette[7]);
+  rect(392, 650, 80, 3, palette[0]);
+}
+static void graphics_menu_hide(void) {
+  if (!pixels || !menu_visible)
+    return;
+  menu_visible = 0;
+  for (int y = 0; y < 256; y++)
+    for (int x = 0; x < 304; x++)
+      rect(28 + x, 438 + y, 1, 1, menu_under[y * 304 + x]);
+}
+static void graphics_menu_toggle(void) {
+  if (!pixels)
+    return;
+  if (menu_visible) {
+    graphics_menu_hide();
+    return;
+  }
+  for (int y = 0; y < 256; y++)
+    for (int x = 0; x < 304; x++)
+      menu_under[y * 304 + x] = surface[(438 + y) * 1024 + 28 + x];
+  menu_visible = 1;
+  rounded_rect(28, 438, 304, 256, 16, 0xd7d7e1);
+  rounded_rect(29, 439, 302, 254, 15, palette[15]);
+  draw_logo(48, 454, nix_menu_alpha, NIX_MENU_W, NIX_MENU_H, palette[15]);
+  label(88, 455, "NIX / Core 0.2", palette[0], palette[15]);
+  const char *items[] = {"Home", "Memories", "Ghost terminal", "Restart / boot",
+                         "Shut down / die"};
+  for (int i = 0; i < 5; i++)
+    label(52, 493 + i * 36, items[i], palette[0], palette[15]);
+}
 static int graphics_init(void) {
   for (u32 dev = 0; dev < 32; dev++)
     if (pci_read(0, dev, 0) == 0x11111234U) {
@@ -137,6 +187,7 @@ static void graphics_cell(int x, int y, char c, u8 attr) {
 static void graphics_chrome(const char *tab) {
   if (!pixels)
     return;
+  menu_visible = 0;
   rect(0, 0, 1024, 768, 0x111116);
   rounded_rect(16, 24, 992, 720, 22, palette[15]);
   rounded_rect(16, 24, 992, 57, 22, palette[7]);
@@ -150,4 +201,8 @@ static void graphics_chrome(const char *tab) {
   label(965, 42, "x", palette[0], palette[7]);
   rounded_rect(16, 700, 992, 44, 22, palette[7]);
   rect(16, 700, 992, 22, palette[7]);
+  rounded_rect(28, 706, 46, 32, 8, palette[15]);
+  draw_logo(39, 710, nix_menu_alpha, NIX_MENU_W, NIX_MENU_H, palette[15]);
+  label(88, 711, "NIX", palette[0], palette[7]);
+  label(790, 711, "CORE 0.2", palette[8], palette[7]);
 }

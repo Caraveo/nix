@@ -82,12 +82,21 @@ static int ghost_builtin(struct GhostToken *t, int count) {
     return 2;
   }
   const char *cmd = t[0].text;
+  if (eq(cmd, "die") || eq(cmd, "shutdown")) {
+    power_request();
+    return 0;
+  }
+  if (eq(cmd, "boot")) {
+    power_boot();
+    return 0;
+  }
   if (eq(cmd, "help")) {
     line("Ghost built-ins for Core");
     line("  list / ls       cat <title>       edit <title>");
     line("  echo <text>     echo <text> >> \"Existing title\"");
     line("  pwd             cd /memories      whoami");
     line("  uname           hostname          clear / exit");
+    line("  die / shutdown (y/n)              boot (restart)");
     line("  Quoted words and chains: ;  &&  ||");
     line("Pipes, processes, expansion, networking and overwrite need OS "
          "services.");
@@ -186,7 +195,7 @@ static void ghost_execute(const char *s) {
       if (gate == G_SEMI || (gate == G_AND && status == 0) ||
           (gate == G_OR && status != 0))
         status = ghost_builtin(p.tokens + start, i - start);
-      if (!ghost_open)
+      if (!ghost_open || power_pending)
         return;
       gate = kind;
       start = i + 1;
