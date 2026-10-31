@@ -2,11 +2,38 @@
 
 # NIX / Core 0.1
 
+**Version 0.1 · Early bootable MVP · Intel Mac / QEMU**
+
 [**Why Nix?**](marketing.md) — The story, the experience, and the conceptual phases behind the project.
 
 A bootable first slice of the [NIX blueprint](https://core-nix.com/): a prompt-first environment and an Author workspace with persistent Memories. This repository's original `index.html` is the design reference.
 
 **An actual freestanding C/assembly kernel, booted directly by QEMU.** It does not run Linux, a browser, or a host web application. It currently enters 32-bit protected mode on an emulated x86 PC, including your Intel Mac's QEMU x86_64 machine. It is an early kernel prototype, not the proposed 64-bit Rust/C microkernel yet.
+
+## NIX running in QEMU
+
+![NIX Core 0.1 Home running in a QEMU window on an Intel Mac](docs/screenshots/nix-core-0.1-qemu.png)
+
+*Core 0.1 on macOS: the prompt-first Home screen, Author entry points, and the local Memories store. Screenshot supplied October 30, 2026.*
+
+| Detail | Core 0.1 |
+| --- | --- |
+| Stage | Early bootable operating-system prototype |
+| Kernel | Freestanding C and assembly; 32-bit x86 protected mode; single address space |
+| Tested host | Intel Mac running QEMU 11.1.3 |
+| Virtual machine | Emulated x86 PC, TCG software acceleration, 64 MiB RAM |
+| Display | 1024 × 768 framebuffer, Ghost-inspired Light interface, Hack typography |
+| Home | Deterministic intent routing; writing and Memories; Ghost opens on request |
+| Author | Four manuscripts; up to 4095 bytes each; append, read, undo, save, and reopen |
+| Persistence | 4 MiB virtual disk; alternating checksummed snapshots; previous-version recovery; text export |
+| Terminal | Ghost Core edition: Memory commands, quoting, command chains, and persistent appends |
+| Connectivity | No virtual network device attached |
+| Verified behavior | Boot, keyboard input, save/restart, corruption recovery, Ghost commands, export, and missing-disk handling |
+| Future work | Local AI, process isolation, full Ghost process/PTY support, x86-64, broader drivers, and isolated Pods |
+
+This version demonstrates the first working slice of NIX. The full operating-system vision and its conceptual phases are described in [Why Nix?](marketing.md).
+
+### Ghost Core edition
 
 ![Ghost terminal running inside Core in QEMU](docs/screenshots/ghost.png)
 
