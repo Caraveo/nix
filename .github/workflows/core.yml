@@ -16,4 +16,4 @@ jobs:
           name: nix-core-kernel-and-capture
           path: |
             build/core.elf
-            build/memories.ppm
+            build/*.ppm

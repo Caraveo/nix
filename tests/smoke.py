@@ -83,6 +83,8 @@ def main():
         subprocess.run([sys.executable, str(ROOT/'scripts/memory.py'), 'init', str(disk)], check=True)
         vm = VM(disk, work)
         try:
+            vm.command('screendump', {'filename': str(ROOT/'build/home.ppm')})
+            assert (ROOT/'build/home.ppm').read_bytes().startswith(b'P6\n1024 768\n255\n')
             # Input through the emulated keyboard, not serial.
             for key in ['h', 'e', 'l', 'p', 'ret']:
                 vm.command('human-monitor-command', {'command-line': f'sendkey {key}'})
@@ -123,10 +125,17 @@ def main():
             vm.expect('ghost /memories > ')
             vm.send('echo "broken', 'unterminated quote')
             vm.expect('ghost /memories > ')
-            screenshot = ROOT / 'build/memories.ppm'
+            vm.send('clear', 'ghost /memories > ')
+            vm.send('help', 'ghost /memories > ')
+            screenshot = ROOT / 'build/ghost.ppm'
             vm.command('screendump', {'filename': str(screenshot)})
         finally:
             vm.close()
+        generation, books = read_disk(disk)
+        assert generation == 3 and books[0][1].endswith('Terminal append\n')
+        export = work/'exports'
+        subprocess.run([sys.executable, str(ROOT/'scripts/memory.py'), 'export', str(disk), '--output', str(export)], check=True)
+        assert (export/'01-First_Light.txt').read_text() == books[0][1]
         # Corrupt newest bank; the kernel must recover the previous generation.
         with disk.open('r+b') as stream:
             stream.seek(512)

@@ -156,12 +156,14 @@ static void number(u32 n) {
 static void screen(const char *view) {
   for (int i = 0; i < 2000; i++)
     cell(i % 80, i / 80, ' ', 0xf0);
-  bar(0, "n i x     /     C O R E                                     MVP 0.1",
-      0x70);
+  graphics_chrome(starts(view, "GHOST") ? "shell" : "nix / Core");
+  if (!pixels)
+    bar(0,
+        "n i x     /     C O R E                                     MVP 0.1",
+        0x70);
   bar(1, view, 0x70);
   bar(24, "PROMPT FIRST     /     LOCAL STORAGE     /     NETWORK DISCONNECTED",
       0x70);
-  graphics_chrome(starts(view, "GHOST") ? "shell" : "nix / Core");
   row = 4;
   col = 3;
   serial('\n');
@@ -270,10 +272,23 @@ static int ready(int drq) {
   return 0;
 }
 static int sector(u32 lba, void *buf, int write) {
-  if (!ready(0))
-    return 0;
+  /* Firmware may leave the absent slave selected or a stale ERR bit set.
+     Select our master first, then wait only for BSY before issuing a command.
+   */
   outb(0x1f6, (u8)(0xe0 | ((lba >> 24) & 15)));
   delay();
+  int idle = 0;
+  for (u32 i = 0; i < 2000000; i++) {
+    u8 status = inb(0x1f7);
+    if (status == 0 || status == 255)
+      return 0;
+    if (!(status & 128)) {
+      idle = 1;
+      break;
+    }
+  }
+  if (!idle)
+    return 0;
   outb(0x1f2, 1);
   outb(0x1f3, (u8)lba);
   outb(0x1f4, (u8)(lba >> 8));

@@ -1,0 +1,2 @@
+# Preserve the upstream source byte-for-byte, including existing whitespace.
+third_party/ghost-upstream/** -whitespace

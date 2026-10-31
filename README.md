@@ -4,9 +4,11 @@ A bootable first slice of the [NIX blueprint](https://core-nix.com/): a prompt-f
 
 **An actual freestanding C/assembly kernel, booted directly by QEMU.** It does not run Linux, a browser, or a host web application. It currently enters 32-bit protected mode on an emulated x86 PC, including your Intel Mac's QEMU x86_64 machine. It is an early kernel prototype, not the proposed 64-bit Rust/C microkernel yet.
 
+![Ghost terminal running inside Core in QEMU](docs/screenshots/ghost.png)
+
 ## Run on an Intel Mac
 
-Requirements: Xcode command line tools, Homebrew, Python 3, LLVM's ELF linker, and QEMU.
+Requirements: Xcode command line tools, Homebrew, Python 3, LLVM's ELF linker, and QEMU. In the prepared local workspace, the launcher also discovers the minimal QEMU build under `build/tools`; you can launch directly without finishing a Homebrew QEMU installation.
 
 ```sh
 xcode-select --install   # only if command line tools are missing
@@ -97,9 +99,14 @@ Two alternating 34-sector banks hold complete Memory snapshots. A save writes an
 python3 tests/smoke.py
 ```
 
-The renderer directly configures QEMU Standard VGA through the Bochs VBE interface at 1024x768, discovers the framebuffer through PCI, and draws a software cursor. A public-domain bitmap font is embedded in `kernel/font8x8.h`.
+The renderer directly configures QEMU Standard VGA through the Bochs VBE interface at 1024x768, discovers the framebuffer through PCI, and draws a software cursor. The antialiased Hack glyph atlas is embedded in `kernel/font.h`, with the font and license retained in `third_party/hack`. `scripts/generate_font.py` regenerates it with Pillow; ordinary builds need no Pillow dependency.
 
-The integration test uses a disposable disk and real QEMU boots. It checks PS/2 keyboard input, serial commands, writing, saving, a full process restart, exclusion of unsaved edits, fallback after deliberately corrupting the latest bank, Ghost quoting/chains/Memory appends, shutdown, and missing-disk behavior. It never mutates your manuscript disk. A framebuffer capture is generated at `build/memories.ppm`.
+The integration test uses a disposable disk and real QEMU boots. It checks PS/2 keyboard input, serial commands, writing, saving, a full process restart, exclusion of unsaved edits, fallback after deliberately corrupting the latest bank, Ghost quoting/chains/Memory appends, shutdown, and missing-disk behavior. It never mutates your manuscript disk. Framebuffer captures are generated at `build/home.ppm` and `build/ghost.ppm`.
+
+Verified locally on an Intel Mac with Clang 17, LLD 21, and QEMU 11.1.3: all
+integration assertions passed, including the 1024x768 framebuffer capture and
+host text export. GitHub Actions is configured for the same test; the initial
+remote run failed during workflow startup before creating any test jobs.
 
 ## Boundary of this MVP
 

@@ -1,5 +1,5 @@
 /* QEMU Standard VGA / Bochs VBE framebuffer. No host GUI dependency. */
-#include "font8x8.h"
+#include "font.h"
 static volatile u32 *pixels;
 static const u32 palette[16] = {0x1e1e2d, 0x354052, 0x0aaa46, 0x008cbe,
                                 0xd23232, 0x8b63a4, 0xbe960a, 0xf0f0f8,
@@ -30,18 +30,27 @@ static void circle(int x, int y, int r, u32 rgb) {
       if (i * i + j * j <= r * r)
         rect(x + i, y + j, 1, 1, rgb);
 }
-static void glyph(int x, int y, char ch, u32 fg) {
+static u32 blend(u32 fg, u32 bg, u32 alpha) {
+  u32 r =
+      (((fg >> 16) & 255) * alpha + ((bg >> 16) & 255) * (255 - alpha)) / 255;
+  u32 g = (((fg >> 8) & 255) * alpha + ((bg >> 8) & 255) * (255 - alpha)) / 255;
+  u32 b = ((fg & 255) * alpha + (bg & 255) * (255 - alpha)) / 255;
+  return (r << 16) | (g << 8) | b;
+}
+static void glyph(int x, int y, char ch, u32 fg, u32 bg) {
   u8 c = (u8)ch;
   if (c > 127)
     return;
-  for (int j = 0; j < 8; j++)
-    for (int i = 0; i < 8; i++)
-      if (font8x8_basic[c][j] & (1 << i))
-        rect(x + i, y + j * 2, 1, 2, fg);
+  for (int j = 0; j < 20; j++)
+    for (int i = 0; i < 12; i++) {
+      u8 alpha = font_alpha[c][j * 12 + i];
+      if (alpha)
+        rect(x + i, y + j, 1, 1, blend(fg, bg, alpha));
+    }
 }
-static void label(int x, int y, const char *s, u32 fg) {
+static void label(int x, int y, const char *s, u32 fg, u32 bg) {
   for (; *s; s++, x += 12)
-    glyph(x, y, *s, fg);
+    glyph(x, y, *s, fg, bg);
 }
 static int graphics_init(void) {
   for (u32 dev = 0; dev < 32; dev++)
@@ -68,7 +77,7 @@ static void graphics_cell(int x, int y, char c, u8 attr) {
     return;
   int px = 32 + x * 12, py = 52 + y * 26;
   rect(px, py, 12, 26, palette[(attr >> 4) & 15]);
-  glyph(px + 2, py + 5, c, palette[attr & 15]);
+  glyph(px, py + 3, c, palette[attr & 15], palette[(attr >> 4) & 15]);
 }
 static void graphics_chrome(const char *tab) {
   if (!pixels)
@@ -80,8 +89,8 @@ static void graphics_chrome(const char *tab) {
   circle(64, 51, 6, 0xffbd2e);
   circle(85, 51, 6, 0x28c840);
   rect(112, 32, 176, 42, palette[15]);
-  label(130, 45, tab, palette[0]);
-  label(311, 45, "+", palette[0]);
-  label(965, 45, "x", palette[0]);
+  label(130, 42, tab, palette[0], palette[15]);
+  label(311, 42, "+", palette[0], palette[7]);
+  label(965, 42, "x", palette[0], palette[7]);
   rect(16, 724, 992, 20, palette[7]);
 }
