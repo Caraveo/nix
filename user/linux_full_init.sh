@@ -7,26 +7,29 @@ mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devpts devpts /dev/pts
 mount -t tmpfs tmpfs /run
-chmod 1777 /tmp
-rm -f /.dockerenv /nix-init
-hostname nix-linux
-ip link set lo up
-if ip link show eth0 >/dev/null 2>&1; then
-    ip addr add 10.0.2.15/24 dev eth0
-    ip link set eth0 up
-    ip route add default via 10.0.2.2
-    echo 'nameserver 10.0.2.3' > /etc/resolv.conf
-    echo 'Guest network: ready (private NAT).'
-else
-    echo 'Guest network: no adapter attached.'
-fi
-echo 'Linux guest online. NIX is the host.'
-echo 'Full Linux userspace. Type help for shell builtins; ls /usr/bin for programs.'
-echo 'curl, wget, ping, python3, git, apt, and standard Linux tools are available.'
-echo 'Type nix and Enter to close this tab. Guest files live until the tab closes.'
-export HOME=/root USER=dios LOGNAME=dios TERM=dumb
-export PS1='linux > '
-cd /root
-while :; do
-    /bin/busybox setsid -c /bin/bash --noprofile --norc -i </dev/ttyS0 >/dev/ttyS0 2>&1
-done
+# Mount the named instance as a complete writable root over the base template.
+case " $(cat /proc/cmdline) " in
+ *" nix.persist=1 "*)
+    /sbin/nix-block >/run/nix-block.log 2>&1 &
+    for attempt in $(seq 1 100); do
+        [ "$(cat /sys/block/nbd0/size 2>/dev/null)" = 41943040 ] && break
+        sleep .1
+    done
+    case " $(cat /proc/cmdline) " in
+      *" nix.fresh=1 "*)
+        mkfs.ext4 -q -F -m 0 -E nodiscard,lazy_itable_init=1,lazy_journal_init=1 /dev/nbd0 || exec /bin/sh;;
+    esac
+    mkdir -p /run/instance /run/nix-root
+    mount -t ext4 -o sync,noatime /dev/nbd0 /run/instance || exec /bin/sh
+    mkdir -p /run/instance/upper /run/instance/work
+    mount -t overlay overlay -o lowerdir=/,upperdir=/run/instance/upper,workdir=/run/instance/work /run/nix-root || exec /bin/sh
+    mkdir -p /run/nix-root/dev /run/nix-root/proc /run/nix-root/sys /run/nix-root/run
+    mount --rbind /dev /run/nix-root/dev
+    mount -t proc proc /run/nix-root/proc
+    mount -t sysfs sysfs /run/nix-root/sys
+    mount --bind /run /run/nix-root/run
+    /sbin/nix-ready || exec /bin/sh
+    exec chroot /run/nix-root /sbin/nix-start
+    ;;
+esac
+exec /sbin/nix-start

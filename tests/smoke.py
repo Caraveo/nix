@@ -45,10 +45,13 @@ class VM:
         while True:
             try:self.qmp.connect(self.qmp_path);break
             except (FileNotFoundError,ConnectionRefusedError):
+                if self.process.poll() is not None:
+                    raise AssertionError(self.process.stderr.read().decode())
                 if time.monotonic()>deadline:raise
                 time.sleep(.01)
         self.stream = self.qmp.makefile('rb')
-        self.stream.readline()
+        if not self.stream.readline():
+            raise AssertionError(self.process.stderr.read().decode())
         self.command('qmp_capabilities')
         if capture_boot:
             self.expect('NIX_BOOT_SPLASH')

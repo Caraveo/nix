@@ -146,7 +146,7 @@ static void reload_cr3(void) {
   __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
   __asm__ volatile("mov %0, %%cr3" ::"r"(cr3) : "memory");
 }
-static u64 *user_pt(void) { return (u64 *)0x186000; }
+static u64 *user_pt(void) { return (u64 *)0x1c2000; }
 static void map_user_stack(u64 *pt) {
   u32 first = (u32)((USER_STACK_BASE - USER_BASE) >> 12);
   for (u32 index = first; index < 512; index++)
@@ -223,7 +223,7 @@ static void arch_init(void) {
   u64 *pd = (u64 *)0x182000;
   pml4[0] |= 4;
   pdpt[0] |= 4;
-  pd[16] = 0x186000 | 7;
+  pd[16] = 0x1c2000 | 7;
   memset(user_pt(), 0, 4096);
   reload_cr3();
   wrmsr(0xC0000080, rdmsr(0xC0000080) | (1ULL << 12));
@@ -870,7 +870,7 @@ static int ask_again_word(const char *s) {
          eq(s, "replace");
 }
 static int kernel_name_used(const char *name) {
-  return linux_find(name) >= 0 || linux_was_requested(name);
+  return linux_find(name) >= 0 || linux_was_requested(name) || instance_find(name) >= 0;
 }
 static void kernel_suffix(char *out, const char *base, int n) {
   u32 i = 0;
@@ -916,7 +916,7 @@ static int kernel_pick(const char *base, int again, char *out) {
   }
   if (!again)
     return 0;
-  for (n = 0; n < LINUX_SLOTS; n++) {
+  for (n = 0; n < INSTANCE_MAX; n++) {
     kernel_suffix(buf, base, n);
     if (!kernel_name_used(buf)) {
       copy(out, buf, 16);
@@ -929,6 +929,7 @@ static int kernel_plan(const char *rest) {
   char base[16];
   char picked[16];
   int again = 0;
+  int named_instance = 0;
   int pick;
   copy(base, "kernel", 16);
   while (*rest == ' ')
@@ -949,6 +950,7 @@ static int kernel_plan(const char *rest) {
         line("Use ask kernel -n linux.");
         return 1;
       }
+      named_instance = 1;
       copy(base, nbuf, 16);
       continue;
     }
@@ -957,6 +959,10 @@ static int kernel_plan(const char *rest) {
       continue;
     }
     return 0;
+  }
+  if (named_instance && !again && linux_focus(base)) return 1;
+  if (named_instance && !again && instance_find(base) >= 0) {
+    linux_guest_enter(base); return 1;
   }
   pick = kernel_pick(base, again, picked);
   if (pick == 0) {
@@ -968,6 +974,7 @@ static int kernel_plan(const char *rest) {
     line("Four kernels are already running. Stop one with nix.");
     return 1;
   }
+  if (named_instance && instance_create(picked, INSTANCE_KERNEL, "") < 0) return 1;
   plan_mode = 1;
   plan_has_grant = 0;
   plan_grant = -1;
@@ -977,6 +984,38 @@ static int kernel_plan(const char *rest) {
   return 1;
 }
 static int resident_ask(const char *rest) {
+  if (starts(rest, "open ")) {
+    const char *name = rest + 5;
+    if (*name == '#' || *name == '@') name++;
+    if (linux_focus(name)) return 1;
+    int id = instance_find(name);
+    if (id < 0) { line("Saved instance not found. Use ask list."); return 1; }
+    linux_guest_enter(instances.instance[id].name); return 1;
+  }
+  if (eq(rest, "list")) {
+    if (!instance_load()) line("No dedicated instance store is attached.");
+    for (int i = 0; i < INSTANCE_MAX; i++) if (instances.instance[i].used) {
+      say("#"); say(instances.instance[i].name);
+      line(linux_find(instances.instance[i].name) >= 0 ? " (running)" : " (saved)");
+    }
+    for (int i = 0; i < LINUX_SLOTS; i++)
+      if (linux_slot[i].used && linux_slot[i].budget.store_id < 0) {
+        say("#"); say(linux_slot[i].name); line(" (temporary, running)");
+      }
+    return 1;
+  }
+  if (starts(rest, "delete ")) {
+    if (!starts(rest + 7, "--confirm ")) {
+      line("Deletion removes the saved filesystem. Use ask delete --confirm NAME."); return 1;
+    }
+    const char *target = rest + 17;
+    if (*target == '#' || *target == '@') target++;
+    int id = instance_find(target);
+    if (id < 0) { line("Saved instance not found. Use ask list."); return 1; }
+    if (linux_find(target) >= 0) { line("Stop the instance with nix before deleting it."); return 1; }
+    line(instance_delete(id) ? "Saved instance deleted." : "Could not delete the saved instance.");
+    return 1;
+  }
   char name[32];
   char word[16];
   u32 n = 0;

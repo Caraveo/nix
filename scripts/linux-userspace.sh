@@ -4,16 +4,25 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build/linux
 docker run --rm --platform linux/amd64 \
-    -v "$PWD/build/linux:/out" -v "$PWD/user/linux_full_init.sh:/nix-init:ro" \
+    -v "$PWD/user:/source:ro" -v "$PWD/build/linux:/out" \
+    nix-linux-builder:7.3.1-local \
+    gcc -O2 -Wall -Wextra -Werror /source/nix_block.c -o /out/nix-block
+docker run --rm --platform linux/amd64 \
+    -v "$PWD/build/linux:/out" -v "$PWD/user:/nix-source:ro" \
     debian:stable sh -ceu '
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends busybox-static bash coreutils \
     curl wget iputils-ping iproute2 ca-certificates python3 git jq \
     nano less openssh-client netcat-openbsd dnsutils findutils file \
-    procps psmisc util-linux make tcc libc6-dev strace cpio gzip xz-utils
+    procps psmisc util-linux make tcc libc6-dev strace cpio gzip xz-utils e2fsprogs
 ln -sf /usr/bin/tcc /usr/local/bin/cc
-cp /nix-init /init
+cp /out/nix-block /sbin/nix-block
+ln -s nix-block /sbin/nix-ready
+ln -s /sbin/nix-block /usr/local/bin/nix
+cp /nix-source/linux_full_init.sh /init
+cp /nix-source/linux_start.sh /sbin/nix-start
+chmod 755 /sbin/nix-start
 chmod 755 /init
 printf "dios:x:0:0:dios:/root:/bin/bash\n" > /etc/passwd
 printf "dios:x:0:\n" > /etc/group

@@ -27,5 +27,9 @@ if [ ! -f build/install.img ]; then
   echo 'Creating the 10 GiB install disk.'
   mkfile -n 10g build/install.img 2>/dev/null || truncate -s 10G build/install.img
 fi
+if [ ! -f build/instances.img ]; then
+  mkfile -n 128g build/instances.img 2>/dev/null || truncate -s 128G build/instances.img
+fi
+set -- "$@" -drive file=build/instances.img,format=raw,if=none,id=instance-store -device ide-hd,drive=instance-store,bus=ide.1,unit=0,serial=NIX-PIONEER-STORE
 : > build/serial.log
 exec ./scripts/qemu.sh -name 'NIX / Core 0.3' -machine pc,accel=tcg -cpu phenom -m 8G -vga std -kernel build/core.elf "$@" -drive file=build/memories.img,format=raw,if=ide,index=0 -drive file=build/install.img,format=raw,if=ide,index=1 -nic none -serial file:build/serial.log

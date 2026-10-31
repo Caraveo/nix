@@ -1,3 +1,4 @@
+#include "instances.h"
 /* Dynamic Linux guest. NIX is the host.
    RAM and the guest disk are carved from free high memory.
    The 2 MiB count-words map is not used and is not enlarged.
@@ -16,6 +17,7 @@ struct GuestBudget {
   u64 disk_bytes;
   u64 sink;
   int full;
+  int store_id;
 };
 #ifndef LINUX_FULL_INITRD_BYTES
 #define LINUX_FULL_INITRD_BYTES 0
@@ -136,7 +138,7 @@ static int linux_geometry(u64 *base, u64 *sink_out) {
   return 1;
 }
 static u8 *guest_ptr(const struct GuestBudget *b, u64 gpa, u64 len) {
-  u64 bytes = b->ram_bytes + b->disk_bytes;
+  u64 bytes = b->ram_bytes + (b->store_id >= 0 ? 0 : b->disk_bytes);
   if (!len || gpa >= bytes || len > bytes - gpa)
     return 0;
   return (u8 *)(b->origin + gpa);
@@ -302,6 +304,12 @@ static void ata_read_sector(void) {
     ata_drq = 0;
     return;
   }
+  if (ata_budget->store_id >= 0) {
+    if (!instance_disk_io(ata_budget->store_id, lba, ata_sector, 0)) {
+      ata_error = 1; ata_err = 4; ata_drq = 0; return;
+    }
+    ata_off = 0; ata_drq = 1; ata_write = 0; ata_error = 0; return;
+  }
   src = guest_ptr(ata_budget, ata_budget->ram_bytes + off, 512);
   if (!src) {
     ata_error = 1;
@@ -327,6 +335,10 @@ static void ata_finish_write(void) {
     ata_drq = 0;
     return;
   }
+  if (ata_budget->store_id >= 0) {
+    ata_error = !instance_disk_io(ata_budget->store_id, lba, ata_sector, 1);
+    ata_err = ata_error ? 4 : 0; ata_drq = 0; return;
+  }
   dst = guest_ptr(ata_budget, ata_budget->ram_bytes + off, 512);
   if (!dst) {
     ata_error = 1;
@@ -348,6 +360,10 @@ static void ata_command(u8 cmd) {
     ata_err = 0x04;
     ata_drq = 0;
     return;
+  }
+  if (cmd == 0xe7) {
+    ata_error = ata_budget->store_id >= 0 && !instance_flush();
+    ata_err = ata_error ? 4 : 0; ata_drq = 0; return;
   }
   if (cmd == 0xec) {
     ata_identify();
@@ -634,6 +650,47 @@ static void port_access(struct Vmcb *vm, u32 size, u16 port, int is_in) {
     vm->save.rax = (vm->save.rax & ~0xffULL) | 0xff;
 }
 
+/* REP port I/O can exit before a user buffer's demand fault. Re-enter
+   Linux at the same instruction with #PF, allowing its normal COW handler. */
+static int linux_io_translate(const struct GuestBudget *b, struct Vmcb *vm,
+                              u64 address, int write, u64 *physical) {
+  u32 error = (write ? 2u : 0u) | ((vm->save.cs.selector & 3) ? 4u : 0u);
+  if ((vm->save.cr0 & 0x80000000ULL) && (vm->save.efer & 0x400)) {
+    u64 table = vm->save.cr3 & 0x000ffffffffff000ULL;
+    int writable = 1, user = 1;
+    for (int level = 3; level >= 0; level--) {
+      u64 shift = 12 + 9 * (u64)level;
+      u8 *slot = guest_ptr(b, table + ((address >> shift) & 511) * 8, 8);
+      u64 entry;
+      if (!slot) return 0;
+      memcpy(&entry, slot, 8);
+      if (!(entry & 1)) goto fault;
+      writable &= !!(entry & 2); user &= !!(entry & 4);
+      if (((error & 4) && !user) ||
+          (write && !writable && ((error & 4) || (vm->save.cr0 & 0x10000)))) {
+        error |= 1; goto fault;
+      }
+      u64 accessed = entry | 0x20;
+      if (level == 0 || (entry & 0x80)) {
+        if (write) accessed |= 0x40;
+        memcpy(slot, &accessed, 8);
+        u64 mask = (1ULL << shift) - 1;
+        *physical = (entry & 0x000ffffffffff000ULL & ~mask) | (address & mask);
+        return 1;
+      }
+      memcpy(slot, &accessed, 8);
+      table = entry & 0x000ffffffffff000ULL;
+    }
+    return 0;
+  }
+  if (translate(b, vm, address, physical)) return 1;
+fault:
+  vm->save.cr2 = address;
+  vm->control.event_inj = 0x80000b0eU;
+  vm->control.event_inj_err = error;
+  vm->control.tlb_ctl = 1;
+  return -1;
+}
 static int linux_string_io(const struct GuestBudget *b, struct Vmcb *vm,
                            u64 *gpr, u64 info, u32 size, u16 port) {
   int input = info & 1;
@@ -650,8 +707,9 @@ static int linux_string_io(const struct GuestBudget *b, struct Vmcb *vm,
     u32 value = 0;
     for (u32 j = 0; j < size; j++) {
       u64 gpa;
-      if (!translate(b, vm, segment + (*index & mask) + j, &gpa) ||
-          !(ptr[j] = guest_ptr(b, gpa, 1))) return 0;
+      int mapped = linux_io_translate(b, vm, segment + (*index & mask) + j, input, &gpa);
+      if (mapped < 0) return 1;
+      if (!mapped || !(ptr[j] = guest_ptr(b, gpa, 1))) return 0;
       if (!input) value |= (u32)*ptr[j] << (j * 8);
     }
     u64 saved = vm->save.rax;
@@ -684,7 +742,7 @@ static int map_guest(const struct GuestBudget *b) {
   pml4[0] = (u64)linux_pdpt | 0x27;
   pdpt[0] = (u64)linux_pd | 0x27;
   pdpt[3] = (u64)linux_mmio_pd | 0x27;
-  pages = (b->ram_bytes + b->disk_bytes) >> 21;
+  pages = (b->ram_bytes + (b->store_id >= 0 ? 0 : b->disk_bytes)) >> 21;
   if (pages > 512)
     return 0;
   for (i = 0; i < pages; i++)
@@ -721,7 +779,7 @@ static int load_linux(const struct GuestBudget *b) {
       init_gpa + init_len > b->ram_bytes)
     return 0;
   wipe((u8 *)b->origin, b->ram_bytes);
-  if (b->disk_bytes)
+  if (b->disk_bytes && b->store_id < 0)
     wipe((u8 *)(b->origin + b->ram_bytes), b->disk_bytes);
   dest = guest_ptr(b, 0x100000, payload);
   boot = guest_ptr(b, 0x10000, 0x1000);
@@ -748,6 +806,11 @@ static int load_linux(const struct GuestBudget *b) {
   if (cur + 1 < cmdline + sizeof cmdline)
     *cur++ = ',';
   append_hex(&cur, cmdline + sizeof cmdline, b->disk_bytes);
+  if (b->store_id >= 0) {
+    const char *extra = (instances.instance[b->store_id].flags & INSTANCE_READY)
+      ? " nix.persist=1 nix.fresh=0" : " nix.persist=1 nix.fresh=1";
+    while (*extra && cur + 1 < cmdline + sizeof cmdline) *cur++ = *extra++;
+  }
   *cur = 0;
   memcpy(cmd, cmdline, (u64)(cur - cmdline) + 1);
   *(u32 *)(boot + 0x218) = (u32)init_gpa;
@@ -771,7 +834,7 @@ static int load_linux(const struct GuestBudget *b) {
   }
   if (*(u32 *)(boot + 0x214) == 0)
     *(u32 *)(boot + 0x214) = 0x100000;
-  boot[0x1e8] = b->disk_bytes ? 4 : 3;
+  boot[0x1e8] = b->disk_bytes && b->store_id < 0 ? 4 : 3;
   {
     struct __attribute__((packed)) {
       u64 addr, size;
@@ -786,7 +849,7 @@ static int load_linux(const struct GuestBudget *b) {
     e820[2].addr = 0x100000;
     e820[2].size = b->ram_bytes - 0x100000;
     e820[2].type = 1;
-    if (b->disk_bytes) {
+    if (b->disk_bytes && b->store_id < 0) {
       e820[3].addr = b->ram_bytes;
       e820[3].size = b->disk_bytes;
       e820[3].type = 2;
@@ -965,6 +1028,7 @@ static int poll_host(void) {
   if (c == '\n') {
     int leave = host_ln == 3 && host_line[0] == 'n' && host_line[1] == 'i' &&
                 host_line[2] == 'x';
+    if (ata_budget && ata_budget->store_id >= 0) leave = 0;
     host_ln = 0;
     host_line[0] = 0;
     if (face_on)
@@ -1229,8 +1293,13 @@ static int run_linux_once(const struct GuestBudget *b, int resume) {
       u32 size = (u32)((info >> 4) & 7);
       u16 port = (u16)((info >> 16) & 0xffff);
       if (info & 4) {
-        if (!size || size > 4 || !linux_string_io(b, vm, gpr, info, size, port))
+        if (!size || size > 4 || !linux_string_io(b, vm, gpr, info, size, port)) {
+          say("Guest string I/O failed: info "); hex64(info);
+          say(" rip "); hex64(vm->save.rip);
+          say(" rsi "); hex64(gpr[GPR_RSI]);
+          say(" rdi "); hex64(gpr[GPR_RDI]); line(".");
           return STOP_FAULT;
+        }
         continue;
       } else
         port_access(vm, size, port, (int)(info & 1));
@@ -1245,15 +1314,25 @@ static int run_linux_once(const struct GuestBudget *b, int resume) {
       vm->save.rip += 1;
       vm->control.int_state = 0;
       /* After /init is up, an idle HLT is not the session ending. */
-      if ((vm->save.rflags & 0x200) == 0 && !linux_saw_online && ++halts > 1000)
+      if ((vm->save.rflags & 0x200) == 0 && !linux_saw_online && ++halts > 1000) {
+        say("Guest startup halted at "); hex64(vm->save.rip); line(".");
         return STOP_FAULT;
+      }
       continue;
     }
     if (vm->control.exit_code == 0x81) {
-      if (!linux_saw_online)
+      if (!linux_saw_online && vm->save.rax != 3) {
+        say("Guest startup hypercall: "); hex64(vm->save.rax); line(".");
         return STOP_FAULT;
-      if (vm->save.rax == 2)
+      }
+      if (vm->save.rax == 2) {
+        if (b->store_id >= 0) instance_flush();
         return STOP_OK;
+      }
+      if (vm->save.rax == 3) {
+        vm->save.rax = instance_mark_ready(b->store_id) ? 0 : 1;
+        vm->save.rip += 3; continue;
+      }
       if (vm->save.rax == 1) {
         while (!uart_wc) {
           int why = host_event();
@@ -1268,8 +1347,10 @@ static int run_linux_once(const struct GuestBudget *b, int resume) {
       vm->save.rip += 3;
       continue;
     }
-    if (vm->control.exit_code == 0x7f)
+    if (vm->control.exit_code == 0x7f) {
+      line("Guest CPU requested shutdown.");
       return linux_saw_online ? STOP_OK : STOP_FAULT;
+    }
     if (vm->control.exit_code == 0x400) {
       say("IOMMU fault GPA ");
       hex64(vm->control.exit_info_2);
@@ -1395,6 +1476,7 @@ static int linux_slot_new(const char *name, struct GuestBudget *b) {
   memset(&linux_slot[i], 0, sizeof linux_slot[i]);
   linux_slot[i].used = 1;
   copy(linux_slot[i].name, name ? name : "linux", 16);
+  b->store_id = -1;
   b->origin = base + (u64)i * slice;
   b->full = linux_rootfs_ready();
   b->ram_bytes = (b->full ? 512ULL : 48ULL) << 20;
@@ -1426,6 +1508,11 @@ static void linux_guest_enter(const char *name) {
   slot = linux_slot_new(name, &budget);
   if (slot < 0)
     return;
+  int saved = instance_find(name);
+  if (saved >= 0) {
+    budget.store_id = saved; budget.disk_bytes = (u64)INSTANCE_SECTORS * 512;
+    linux_slot[slot].budget = budget;
+  }
   linux_budget = budget;
   linux_have_budget = 1;
   say("Dynamic RAM: ");
@@ -1435,11 +1522,12 @@ static void linux_guest_enter(const char *name) {
   line(".");
   say("Dynamic disk: ");
   number((u32)(budget.disk_bytes >> 20));
-  say(" MiB at ");
-  hex64(budget.origin + budget.ram_bytes);
-  line(".");
+  if (budget.store_id >= 0) line(" MiB in the persistent instance store.");
+  else {
+    say(" MiB at "); hex64(budget.origin + budget.ram_bytes); line(".");
+  }
   line("IOMMU proxy: COM1 and the guest disk. Other devices stay contained.");
-  if (budget.disk_bytes && !disk_checked(&budget)) {
+  if (budget.disk_bytes && budget.store_id < 0 && !disk_checked(&budget)) {
     linux_slot[slot].used = 0;
     line("Dynamic disk check failed. It was not started.");
     return;

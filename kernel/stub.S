@@ -95,9 +95,9 @@ no_module:
   xor %eax, %eax
   rep stosb
 zero_skip:
-  /* Identity-map the first 4 GiB. RAM is cached; the PCI hole is not. */
+  /* Identity-map 64 GiB. Only the PC PCI hole at 3..4 GiB is uncached. */
   mov $pml4, %edi
-  mov $0x6000, %ecx
+  mov $0x42000, %ecx
   xor %eax, %eax
   rep stosb
   mov $pml4, %eax
@@ -106,7 +106,7 @@ zero_skip:
   mov %ebx, (%eax)
   mov $pd, %eax
   mov $pdpt, %edi
-  mov $4, %ecx
+  mov $64, %ecx
 fill_pdpt:
   mov %eax, %ebx
   or $7, %ebx
@@ -116,17 +116,22 @@ fill_pdpt:
   loop fill_pdpt
   mov $pd, %edi
   xor %ebx, %ebx
-  mov $2048, %ecx
+  xor %edx, %edx
+  mov $32768, %ecx
 fill_pd:
   mov %ebx, %eax
   or $0x83, %eax
+  test %edx, %edx
+  jnz cacheable
   cmp $0xc0000000, %ebx
   jb cacheable
   or $0x10, %eax
 cacheable:
   mov %eax, (%edi)
+  mov %edx, 4(%edi)
   add $8, %edi
   add $0x200000, %ebx
+  adc $0, %edx
   loop fill_pd
   mov $pml4, %eax
   mov %eax, %cr3
