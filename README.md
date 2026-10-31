@@ -49,8 +49,8 @@ loaded model. Escape cancels generation. The launcher attaches the verified
 132 MiB model boot module automatically when present; the guest has no network
 device and needs no host model server or API key.
 
-[Download Core 0.2 with the model included](https://github.com/Caraveo/nix/releases/tag/v0.2)
-for a prebuilt QEMU package. From a fresh source checkout, prepare the model once:
+**Prebuilt package:** `make package` produces a ZIP containing the kernel, model,
+licenses, and launch scripts. From a fresh source checkout, prepare the model once:
 
 ```sh
 ./scripts/setup-model.sh
