@@ -13,8 +13,8 @@ The runnable Core adaptation is in `kernel/ghost/`. Its bounded tokenizer follow
 `src/parser.rs`, and its command names/aliases follow the upstream built-ins.
 The framebuffer palette uses `Theme::Light` from `src/app.rs`. The renderer
 recreates the light canvas and tab toolbar from `src/gui.rs`, without egui or
-macOS framework dependencies. Traffic lights and the tab toolbar are visual
-chrome, not clickable controls in this MVP.
+macOS framework dependencies. The toolbar + and x have Core-specific click actions. Traffic lights remain
+visual chrome; dragging, resizing, and full window controls are not implemented.
 
 Core implements a limited built-in command engine. It cannot execute Ghost's
 macOS binary or external processes. PTYs, full VT emulation, arbitrary file APIs,

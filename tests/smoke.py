@@ -85,6 +85,33 @@ def main():
         try:
             vm.command('screendump', {'filename': str(ROOT/'build/home.ppm')})
             assert (ROOT/'build/home.ppm').read_bytes().startswith(b'P6\n1024 768\n255\n')
+            def frame_pixel(path, x, y):
+                data=path.read_bytes().split(b'\n',3)[3]
+                offset=(y*1024+x)*3
+                return tuple(data[offset:offset+3])
+            capture=ROOT/'build/home.ppm'
+            assert frame_pixel(capture,16,24)==(17,17,22), 'Window corner is square'
+            assert frame_pixel(capture,720,440)==(23,23,36), 'Pointer missing'
+            def move(dx,dy):
+                vm.command('input-send-event', {'events':[
+                    {'type':'rel','data':{'axis':'x','value':dx}},
+                    {'type':'rel','data':{'axis':'y','value':dy}}]})
+                time.sleep(.06)
+            move(60,40)
+            vm.command('screendump', {'filename':str(capture)})
+            assert frame_pixel(capture,780,480)==(23,23,36), 'Mouse did not move'
+            assert frame_pixel(capture,720,440)==(250,250,252), 'Pointer left trails'
+            # Click the toolbar + to open Ghost, then return to Home.
+            dx,dy=320-780,51-480
+            while dx or dy:
+                x=max(-80,min(80,dx));y=max(-80,min(80,dy))
+                move(x,y);dx-=x;dy-=y
+            for down in [True,False]:
+                vm.command('input-send-event', {'events':[{'type':'btn','data':{'button':'left','down':down}}]})
+                time.sleep(.06)
+            vm.expect('ghost /memories > ')
+            vm.send('exit','nix > ')
+            vm.command('screendump', {'filename':str(capture)})
             # Input through the emulated keyboard, not serial.
             for key in ['h', 'e', 'l', 'p', 'ret']:
                 vm.command('human-monitor-command', {'command-line': f'sendkey {key}'})
@@ -164,7 +191,7 @@ def main():
             vm.send(':save', 'Save failed. Text remains in RAM')
         finally:
             vm.close()
-    print('PASS: boot, PS/2 input, Author, disk save, restart, unsaved isolation, bank recovery, Ghost chains/quotes/append/errors, shutdown, missing disk')
+    print('PASS: boot, rounded corners, PS/2 mouse movement/clicks/no trails, PS/2 keyboard, Author, disk save, restart, unsaved isolation, bank recovery, Ghost chains/quotes/append/errors, shutdown, missing disk')
 
 
 if __name__ == '__main__':

@@ -65,6 +65,10 @@ static void copy(char *d, const char *s, u32 cap) {
   d[i] = 0;
 }
 #include "framebuffer.h"
+#include "mouse.h"
+static int home_visible = 0;
+static const char *mouse_action(int x, int y);
+static char mouse_pending[64];
 static u16 shadow[2000];
 static volatile u16 *vga = (u16 *)0xb8000;
 static int row = 4, col = 3;
@@ -154,6 +158,7 @@ static void number(u32 n) {
     put(b[--i]);
 }
 static void screen(const char *view) {
+  home_visible = starts(view, "HOME");
   for (int i = 0; i < 2000; i++)
     cell(i % 80, i / 80, ' ', 0xf0);
   graphics_chrome(starts(view, "GHOST") ? "shell" : "nix / Core");
@@ -198,9 +203,20 @@ static char key(void) {
         c = '\b';
       return c;
     }
-    if (!(inb(0x64) & 1))
+    u8 status = inb(0x64);
+    if (!(status & 1))
       continue;
     u8 s = inb(0x60);
+    if (status & 0x20) {
+      if (mouse_byte(s)) {
+        const char *action = mouse_action(mouse_x, mouse_y);
+        if (action) {
+          copy(mouse_pending, action, sizeof(mouse_pending));
+          return 1;
+        }
+      }
+      continue;
+    }
     if (s == 0xe0) {
       extended = 1;
       continue;
@@ -234,6 +250,15 @@ static void input(char *s, u32 cap) {
   u32 n = 0;
   for (;;) {
     char c = key();
+    if (c == 1) {
+      /* A click never discards a partially typed command or draft line. */
+      if (n)
+        continue;
+      copy(s, mouse_pending, cap);
+      say(s);
+      put('\n');
+      return;
+    }
     if (c == '\n') {
       s[n] = 0;
       put('\n');
@@ -446,6 +471,28 @@ static void author(void) {
   line("");
 }
 #include "ghost/shell.h"
+static const char *mouse_action(int x, int y) {
+  if (y >= 32 && y < 74) {
+    if (x >= 950 && x < 995)
+      return selected >= 0 ? ":home" : ghost_open ? "exit" : "home";
+    if (x >= 300 && x < 340 && selected < 0)
+      return ghost_open ? "clear" : "open terminal";
+  }
+  if (home_visible && x >= 60 && x < 980) {
+    int hit = (y - 52) / 26;
+    if (hit == 7)
+      return "write a book called My Story";
+    if (hit == 8)
+      return "open My Story";
+    if (hit == 9)
+      return "show my memories";
+    if (hit == 10)
+      return "open terminal";
+    if (hit == 11)
+      return "help";
+  }
+  return (const char *)0;
+}
 static void execute(char *s) {
   char lower[256];
   copy(lower, s, sizeof(lower));
@@ -618,6 +665,7 @@ void kernel_main(u32 magic, u32 info) {
     vga = shadow;
   load();
   home();
+  mouse_init();
   for (;;) {
     color = 0xf3;
     say(selected >= 0 ? "  + " : ghost_open ? "ghost /memories > " : "nix > ");

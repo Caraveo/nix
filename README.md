@@ -12,9 +12,9 @@ A bootable first slice of the [NIX blueprint](https://core-nix.com/): a prompt-f
 
 ## NIX running in QEMU
 
-![NIX Core 0.1 Home running in a QEMU window on an Intel Mac](docs/screenshots/nix-core-0.1-qemu.png)
+![NIX Core 0.1 Home running in a QEMU window on an Intel Mac](docs/screenshots/home.png)
 
-*Core 0.1 on macOS: the prompt-first Home screen, Author entry points, and the local Memories store. Screenshot supplied October 30, 2026.*
+*Core 0.1 running in QEMU: rounded interface corners, a visible mouse pointer, prompt-first Home, Author entry points, and local Memories. Updated October 30, 2026. [Original macOS window capture](docs/screenshots/nix-core-0.1-qemu.png).*
 
 | Detail | Core 0.1 |
 | --- | --- |
@@ -22,7 +22,8 @@ A bootable first slice of the [NIX blueprint](https://core-nix.com/): a prompt-f
 | Kernel | Freestanding C and assembly; 32-bit x86 protected mode; single address space |
 | Tested host | Intel Mac running QEMU 11.1.3 |
 | Virtual machine | Emulated x86 PC, TCG software acceleration, 64 MiB RAM |
-| Display | 1024 × 768 framebuffer, Ghost-inspired Light interface, Hack typography |
+| Display | 1024 × 768 framebuffer, rounded panels and tab, Ghost-inspired Light interface, Hack typography |
+| Input | PS/2 keyboard and mouse; software pointer; clickable Home shortcuts and toolbar |
 | Home | Deterministic intent routing; writing and Memories; Ghost opens on request |
 | Author | Four manuscripts; up to 4095 bytes each; append, read, undo, save, and reopen |
 | Persistence | 4 MiB virtual disk; alternating checksummed snapshots; previous-version recovery; text export |
@@ -81,7 +82,7 @@ Close QEMU, launch it again, and reopen `First Light`: saved text remains on the
 Ask NIX to `open terminal` (or type `ghost`). Core opens the Ghost port on request;
 Home remains the prompt-first intent screen. The framebuffer uses Ghost 0.8.0's
 Light colors, pale toolbar, shell tab, window-control colors, and monospace canvas.
-The toolbar is decorative in this keyboard-first MVP.
+The PS/2 mouse pointer moves throughout the framebuffer. From Home, click a listed shortcut or the toolbar **+** to open Ghost. In Ghost, **+** clears the shell. The toolbar **x** returns to Home; in Author it saves first. Click actions run only when the input line is empty, so they do not discard a partially typed command or draft. Window dragging, resizing, selection, and the colored window-control dots are not implemented.
 
 ```text
 nix > open terminal
@@ -132,7 +133,7 @@ python3 tests/smoke.py
 
 The renderer directly configures QEMU Standard VGA through the Bochs VBE interface at 1024x768, discovers the framebuffer through PCI, and draws a software cursor. The antialiased Hack glyph atlas is embedded in `kernel/font.h`, with the font and license retained in `third_party/hack`. `scripts/generate_font.py` regenerates it with Pillow; ordinary builds need no Pillow dependency.
 
-The integration test uses a disposable disk and real QEMU boots. It checks PS/2 keyboard input, serial commands, writing, saving, a full process restart, exclusion of unsaved edits, fallback after deliberately corrupting the latest bank, Ghost quoting/chains/Memory appends, shutdown, and missing-disk behavior. It never mutates your manuscript disk. Framebuffer captures are generated at `build/home.ppm` and `build/ghost.ppm`.
+The integration test uses a disposable disk and real QEMU boots. It checks rounded corner pixels, PS/2 mouse movement, click-to-open Ghost, pointer trail removal, PS/2 keyboard input, serial commands, writing, saving, a full process restart, exclusion of unsaved edits, fallback after deliberately corrupting the latest bank, Ghost quoting/chains/Memory appends, shutdown, and missing-disk behavior. It never mutates your manuscript disk. Framebuffer captures are generated at `build/home.ppm` and `build/ghost.ppm`.
 
 Verified locally on an Intel Mac with Clang 17, LLD 21, and QEMU 11.1.3: all
 integration assertions passed, including the 1024x768 framebuffer capture and
@@ -143,4 +144,4 @@ remote run failed during workflow startup before creating any test jobs.
 
 Implemented: boot, Ghost-style framebuffer interface, prompt routing, writing workspace, explicit save, restart persistence, previous-generation recovery, host text export, serial diagnostics, and the Ghost terminal port.
 
-Still needed for the full blueprint: x86-64 long mode, Rust components, paging/process isolation, scheduler/IPC/capabilities, UEFI boot, window compositor, local model inference/OpenCode, real isolated Pods, networking, USB/NVMe, guest virtualization, accelerated graphics and games. All code currently executes at kernel privilege in one address space with interrupts disabled and polled I/O. The Author workspace is a built-in application, not an isolated Pod. No AI model or automatic code generation is included. The framebuffer toolbar is visual chrome; mouse interaction is not implemented.
+Still needed for the full blueprint: x86-64 long mode, Rust components, paging/process isolation, scheduler/IPC/capabilities, UEFI boot, window compositor, local model inference/OpenCode, real isolated Pods, networking, USB/NVMe, guest virtualization, accelerated graphics and games. All code currently executes at kernel privilege in one address space with interrupts disabled and polled I/O. The Author workspace is a built-in application, not an isolated Pod. No AI model or automatic code generation is included. The interface supports a PS/2 pointer and selected click targets; window dragging, resizing, and arbitrary text selection are not implemented.

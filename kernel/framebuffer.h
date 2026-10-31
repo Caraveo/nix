@@ -1,6 +1,43 @@
 /* QEMU Standard VGA / Bochs VBE framebuffer. No host GUI dependency. */
 #include "font.h"
 static volatile u32 *pixels;
+/* Retain the scene beneath the software pointer, including while text redraws.
+ */
+static u32 surface[1024 * 768];
+static int mouse_x = 720, mouse_y = 440, pointer_on = 0;
+static const char pointer_shape[20][15] = {
+    "X             ", "XX            ", "X.X           ", "X..X          ",
+    "X...X         ", "X....X        ", "X.....X       ", "X......X      ",
+    "X.......X     ", "X........X    ", "X.........X   ", "X......XXXXX  ",
+    "X...X..X      ", "X..XX..X      ", "X.X  X..X     ", "XX   X..X     ",
+    "X     X..X    ", "      X..X    ", "       XX     ", "              "};
+static u32 pointer_pixel(int x, int y, u32 background) {
+  if (!pointer_on || x < mouse_x || y < mouse_y || x >= mouse_x + 14 ||
+      y >= mouse_y + 20)
+    return background;
+  char c = pointer_shape[y - mouse_y][x - mouse_x];
+  return c == 'X' ? 0x171724 : c == '.' ? 0xffffff : background;
+}
+static void pointer_move(int x, int y) {
+  if (!pixels)
+    return;
+  if (x < 0)
+    x = 0;
+  if (x > 1023)
+    x = 1023;
+  if (y < 0)
+    y = 0;
+  if (y > 767)
+    y = 767;
+  for (int j = mouse_y; j < mouse_y + 20 && j < 768; j++)
+    for (int i = mouse_x; i < mouse_x + 14 && i < 1024; i++)
+      pixels[j * 1024 + i] = surface[j * 1024 + i];
+  mouse_x = x;
+  mouse_y = y;
+  for (int j = y; j < y + 20 && j < 768; j++)
+    for (int i = x; i < x + 14 && i < 1024; i++)
+      pixels[j * 1024 + i] = pointer_pixel(i, j, surface[j * 1024 + i]);
+}
 static const u32 palette[16] = {0x1e1e2d, 0x354052, 0x0aaa46, 0x008cbe,
                                 0xd23232, 0x8b63a4, 0xbe960a, 0xf0f0f8,
                                 0x828291, 0xd2ebfa, 0x28c840, 0x008cbe,
@@ -22,7 +59,25 @@ static void rect(int x, int y, int w, int h, u32 rgb) {
     return;
   for (int j = y; j < y + h; j++)
     for (int i = x; i < x + w; i++)
-      pixels[j * 1024 + i] = rgb;
+      if (i >= 0 && i < 1024 && j >= 0 && j < 768) {
+        surface[j * 1024 + i] = rgb;
+        pixels[j * 1024 + i] = pointer_pixel(i, j, rgb);
+      }
+}
+static void rounded_rect(int x, int y, int w, int h, int radius, u32 rgb) {
+  for (int j = 0; j < h; j++) {
+    int edge = j < radius        ? radius - 1 - j
+               : j >= h - radius ? j - (h - radius)
+                                 : 0;
+    int inset = 0;
+    if (j < radius || j >= h - radius) {
+      while (inset < radius &&
+             (radius - inset - 1) * (radius - inset - 1) + edge * edge >
+                 radius * radius)
+        inset++;
+    }
+    rect(x + inset, y + j, w - 2 * inset, 1, rgb);
+  }
 }
 static void circle(int x, int y, int r, u32 rgb) {
   for (int j = -r; j <= r; j++)
@@ -83,14 +138,16 @@ static void graphics_chrome(const char *tab) {
   if (!pixels)
     return;
   rect(0, 0, 1024, 768, 0x111116);
-  rect(16, 24, 992, 720, palette[15]);
-  rect(16, 24, 992, 57, palette[7]);
+  rounded_rect(16, 24, 992, 720, 22, palette[15]);
+  rounded_rect(16, 24, 992, 57, 22, palette[7]);
+  rect(16, 46, 992, 35, palette[7]);
   circle(43, 51, 6, 0xff5f57);
   circle(64, 51, 6, 0xffbd2e);
   circle(85, 51, 6, 0x28c840);
-  rect(112, 32, 176, 42, palette[15]);
+  rounded_rect(112, 32, 176, 42, 9, palette[15]);
   label(130, 42, tab, palette[0], palette[15]);
   label(311, 42, "+", palette[0], palette[7]);
   label(965, 42, "x", palette[0], palette[7]);
-  rect(16, 724, 992, 20, palette[7]);
+  rounded_rect(16, 700, 992, 44, 22, palette[7]);
+  rect(16, 700, 992, 22, palette[7]);
 }
