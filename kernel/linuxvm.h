@@ -32,6 +32,33 @@ static u64 machine_ram(void) {
   if (info < 0x1000)
     return 0;
   flags = *(volatile u32 *)(u64)info;
+  /* mem_upper stops at the PCI hole. Multiboot's E820 map also includes
+     usable RAM remapped above 4 GiB. Count lengths, not the highest address. */
+  if (flags & (1u << 6)) {
+    u32 length = *(volatile u32 *)((u64)info + 44);
+    u32 address = *(volatile u32 *)((u64)info + 48);
+    u64 offset = 0, total = 0;
+    if (address >= 0x1000 && (u64)address + length <= (1ULL << 32)) {
+      while (offset + 4 <= length) {
+        const u8 *entry = (const u8 *)((u64)address + offset);
+        u32 size;
+        u64 bytes;
+        u32 type;
+        memcpy(&size, entry, 4);
+        if (size < 20 || (u64)size + 4 > length - offset)
+          break;
+        memcpy(&bytes, entry + 12, 8);
+        memcpy(&type, entry + 20, 4);
+        if (type == 1 && bytes <= ~0ULL - total)
+          total += bytes;
+        offset += (u64)size + 4;
+      }
+      /* Firmware reserves small parts of conventional RAM. Report capacity
+         to a whole MiB so an 8 GiB machine meets the 8 GiB requirement. */
+      if (offset == length && total && total <= ~0ULL - 0xfffffULL)
+        return (total + 0xfffffULL) & ~0xfffffULL;
+    }
+  }
   if ((flags & 1) == 0)
     return 0;
   upper = *(volatile u32 *)((u64)info + 8);

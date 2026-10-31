@@ -44,6 +44,7 @@ def main():
                 boot = vm.send('y', 'linux > \n', timeout=300)
                 assert f'Opening #{name}.'.encode() in boot
                 assert b'Linux version 7.3.1' in boot
+                print(f'Booted #{name}', flush=True)
                 partial(f'echo saved{i}')
                 click(70)
                 vm.expect('nix > ')
@@ -55,8 +56,11 @@ def main():
             for i in (2, 0, 3, 1):
                 click(centers[i])
                 vm.send('', f'saved{i}\nlinux > \n')
+                print(f'Resumed #{names[i]} with its own input', flush=True)
             click(210)
             vm.expect('ghost /memories > ')
+            click(70)
+            vm.expect('nix > ')
             vm.send('status', '4 Linux kernels.')
             # Close one tab only; the others must remain resumable.
             click(centers[0])

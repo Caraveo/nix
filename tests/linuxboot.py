@@ -20,6 +20,8 @@ def main():
     image = ROOT / 'build' / 'guest-bzImage'
     real = image.is_file() and image.stat().st_size > 0x10000
     vm = VM(disk, work, memory='8G')
+    # RAM above the PCI hole must count toward the host requirement.
+    vm.send('status', 'Memory: 8192 MiB. NIX requires 8 GiB.')
     vm.send('ask debian', 'NIX is not Linux.')
     if not real:
         vm.send('y', 'image is not loaded.', timeout=20)
