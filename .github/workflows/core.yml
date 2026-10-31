@@ -10,7 +10,7 @@ jobs:
       - name: Install freestanding build and emulator tools
         run: sudo apt-get update && sudo apt-get install -y clang lld qemu-system-x86
       - name: Boot and test Core
-        run: python3 tests/smoke.py && python3 tests/power.py
+        run: python3 tests/smoke.py && python3 tests/power.py && python3 tests/phase4.py && python3 tests/intent.py && python3 tests/asm.py
       - uses: actions/upload-artifact@v4
         with:
           name: nix-core-kernel-and-capture

@@ -16,16 +16,23 @@ from memory import BANK_SIZE, decode, read_disk
 
 
 class VM:
-    def __init__(self, disk, work, model=None, capture_boot=None):
+    def __init__(self, disk, work, model=None, capture_boot=None, extra=None, memory=None,
+                 kernel=True, boot_timeout=15):
         self.qmp_path = str(work / 'qmp.sock')
         Path(self.qmp_path).unlink(missing_ok=True)
         drive = ['-drive', f'file={disk},format=raw,if=ide,index=0'] if disk else []
         model_args=['-initrd',str(model)] if model else []
+        if extra is None:
+            extra = ['-nic', 'none']
+        if memory is None:
+            memory = '512M' if model else '64M'
         self.process = subprocess.Popen([
-            str(ROOT/'scripts/qemu.sh'), '-machine', 'pc,accel=tcg', '-m', '512M' if model else '64M',
-            '-vga', 'std', '-kernel', str(ROOT / 'build/core.elf'),
+            str(ROOT/'scripts/qemu.sh'), '-machine', 'pc,accel=tcg', '-cpu', 'phenom',
+            '-m', memory,
+            '-vga', 'std',
+            *(['-kernel', str(ROOT / 'build/core.elf')] if kernel else []),
             *drive, *model_args,
-            '-nic', 'none', '-display', 'none', '-serial', 'stdio',
+            *extra, '-display', 'none', '-serial', 'stdio',
             '-monitor', 'none', '-qmp', f'unix:{self.qmp_path},server=on,wait=off',
             ], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE)
@@ -43,7 +50,7 @@ class VM:
         if capture_boot:
             self.expect('NIX_BOOT_SPLASH')
             self.command('screendump',{'filename':str(capture_boot)})
-        self.expect('nix > ')
+        self.expect('nix > ', boot_timeout)
 
     def command(self, command, arguments=None):
         request = {'execute': command}
@@ -71,10 +78,10 @@ class VM:
         before, self.output = self.output.split(target, 1)
         return before
 
-    def send(self, text, expected):
+    def send(self, text, expected, timeout=15):
         self.process.stdin.write((text + '\n').encode())
         self.process.stdin.flush()
-        return self.expect(expected)
+        return self.expect(expected, timeout)
 
     def close(self):
         self.process.terminate()
@@ -99,8 +106,9 @@ def main():
                 offset=(y*1024+x)*3
                 return tuple(data[offset:offset+3])
             capture=ROOT/'build/home.ppm'
-            assert frame_pixel(capture,16,24)==(17,17,22), 'Window corner is square'
-            assert frame_pixel(capture,720,440)==(23,23,36), 'Pointer missing'
+            assert frame_pixel(capture,16,24)==(33,23,19), 'Home is not the dark field'
+            assert frame_pixel(capture,944,632)==(226,154,118), 'Prompt button missing'
+            assert frame_pixel(capture,900,700)==(23,23,36), 'Pointer missing'
             def move(dx,dy):
                 vm.command('input-send-event', {'events':[
                     {'type':'rel','data':{'axis':'x','value':dx}},
@@ -108,24 +116,18 @@ def main():
                 time.sleep(.06)
             move(60,40)
             vm.command('screendump', {'filename':str(capture)})
-            assert frame_pixel(capture,780,480)==(23,23,36), 'Mouse did not move'
-            assert frame_pixel(capture,720,440)==(250,250,252), 'Pointer left trails'
-            # Click the toolbar + to open Ghost, then return to Home.
-            dx,dy=320-780,51-480
-            while dx or dy:
-                x=max(-80,min(80,dx));y=max(-80,min(80,dy))
-                move(x,y);dx-=x;dy-=y
-            for down in [True,False]:
-                vm.command('input-send-event', {'events':[{'type':'btn','data':{'button':'left','down':down}}]})
-                time.sleep(.06)
-            vm.expect('ghost /memories > ')
+            assert frame_pixel(capture,960,740)==(23,23,36), 'Mouse did not move'
+            assert frame_pixel(capture,900,700)==(33,23,19), 'Pointer left trails'
+            # The home face has no toolbar. The prompt opens Ghost.
+            vm.send('open terminal', 'ghost /memories > ')
             vm.send('exit','nix > ')
             vm.command('screendump', {'filename':str(capture)})
+            assert frame_pixel(capture,944,632)==(226,154,118), 'Home prompt did not return'
             # Input through the emulated keyboard, not serial.
             for key in ['h', 'e', 'l', 'p', 'ret']:
                 vm.command('human-monitor-command', {'command-line': f'sendkey {key}'})
                 time.sleep(.08)
-            vm.expect('Intent examples:')
+            vm.expect('You can:')
             vm.expect('nix > ')
             vm.send('write a book called First Light', '  + ')
             vm.send('The first words survive a reboot.', '  + ')
@@ -201,7 +203,7 @@ def main():
             vm.send(':save', 'Save failed. Text remains in RAM')
         finally:
             vm.close()
-    print('PASS: boot, rounded corners, PS/2 mouse movement/clicks/no trails, PS/2 keyboard, Author, disk save, restart, unsaved isolation, bank recovery, Ghost chains/quotes/append/errors, shutdown, missing disk')
+    print('PASS: boot, dark welcome, PS/2 mouse movement/no trails, PS/2 keyboard, Author, disk save, restart, unsaved isolation, bank recovery, Ghost chains/quotes/append/errors, shutdown, missing disk')
 
 
 if __name__ == '__main__':

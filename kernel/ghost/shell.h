@@ -2,7 +2,13 @@
 #include "parser.h"
 static int ghost_open = 0;
 static void ghost_screen(void) {
-  screen("GHOST  /  shell                                           Light");
+  if (face_on && pixels) {
+    face_load(1);
+    if (face_rows_n)
+      return;
+  } else
+    screen("GHOST  /  shell                                           Light");
+  line("Principal dios. dios is root.");
   line("Ghost / Core edition");
   line("Your terminal, on request. Type help for supported commands.");
   line("");
@@ -68,7 +74,7 @@ static int ghost_builtin(struct GhostToken *t, int count) {
     b->length += n;
     b->text[b->length++] = '\n';
     b->text[b->length] = 0;
-    if (!save()) {
+    if (!commit_book(id)) {
       b->length = old;
       b->text[old] = 0;
       line("Save failed. Append was rolled back in RAM.");
@@ -122,7 +128,8 @@ static int ghost_builtin(struct GhostToken *t, int count) {
     return 1;
   }
   if (eq(cmd, "whoami")) {
-    line("owner");
+    line("dios");
+    line("dios is root.");
     return 0;
   }
   if (eq(cmd, "hostname")) {
@@ -130,7 +137,7 @@ static int ghost_builtin(struct GhostToken *t, int count) {
     return 0;
   }
   if (eq(cmd, "uname")) {
-    line("NIX Core 0.2 i686 / Ghost Core edition");
+    line("NIX Core 0.3 x86-64 / Ghost Core edition");
     return 0;
   }
   if (eq(cmd, "echo") || eq(cmd, "print")) {
@@ -157,7 +164,7 @@ static int ghost_builtin(struct GhostToken *t, int count) {
     if (eq(cmd, "edit")) {
       ghost_open = 0;
       selected = id;
-      author();
+      launch_author = 1;
     } else
       line(store.books[id].text);
     return 0;

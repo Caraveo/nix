@@ -1,7 +1,8 @@
-/* Core 0.2: freestanding, single-address-space x86 prototype. */
+/* Core 0.3: long mode, ring-3 pods, and an AMD SVM build guest. */
 typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
+typedef unsigned long u64;
 static inline void outb(u16 p, u8 v) {
   __asm__ volatile("outb %0,%1" ::"a"(v), "Nd"(p));
 }
@@ -60,6 +61,9 @@ static void copy(char *d, const char *s, u32 cap) {
 }
 #include "framebuffer.h"
 #include "mouse.h"
+enum { POD_NONE = 0, POD_AUTHOR = 1, POD_COUNTER = 2 };
+static int pod_kind;
+static int launch_author;
 static int home_visible = 0;
 static int key_shift = 0;
 static const char *mouse_action(int x, int y);
@@ -112,7 +116,11 @@ static void scroll(void) {
   row = 22;
 }
 static void put(char c) {
+  if (face_on && pixels)
+    face_note(c);
   serial(c);
+  if (face_on && pixels)
+    return;
   if (c == '\n') {
     row++;
     col = 3;
@@ -154,13 +162,15 @@ static void number(u32 n) {
     put(b[--i]);
 }
 static void screen(const char *view) {
+  face_on = 0;
+  face_capture = 0;
   home_visible = starts(view, "HOME");
   for (int i = 0; i < 2000; i++)
     cell(i % 80, i / 80, ' ', 0xf0);
   graphics_chrome(starts(view, "GHOST") ? "shell" : "nix / Core");
   if (!pixels)
     bar(0,
-        "n i x     /     C O R E                                     MVP 0.2",
+        "n i x     /     C O R E                                     MVP 0.3",
         0x70);
   bar(1, view, 0x70);
   bar(24, "PROMPT FIRST     /     LOCAL STORAGE     /     NETWORK DISCONNECTED",
@@ -256,6 +266,8 @@ static void input(char *s, u32 cap) {
       if (n)
         continue;
       copy(s, mouse_pending, cap);
+      if (starts(s, "focus "))
+        return;
       say(s);
       put('\n');
       return;
@@ -263,18 +275,23 @@ static void input(char *s, u32 cap) {
     if (c == '\n') {
       s[n] = 0;
       put('\n');
+      face_sync("");
       return;
     }
     if (c == '\b') {
       if (n) {
         n--;
+        s[n] = 0;
         put('\b');
+        face_sync(s);
       }
       continue;
     }
     if (c >= 32 && c <= 126 && n + 1 < cap) {
       s[n++] = c;
+      s[n] = 0;
       put(c);
+      face_sync(s);
     }
   }
 }
@@ -338,6 +355,50 @@ static int flush(void) {
   delay();
   return ready(0);
 }
+/* Primary slave is the install disk. Memories stay on the master. */
+static u64 identify_install_disk(void) {
+  u16 id[256];
+  u32 i;
+  u8 status;
+  int idle = 0;
+  outb(0x1f6, 0xf0);
+  delay();
+  for (i = 0; i < 200000; i++) {
+    status = inb(0x1f7);
+    if (status == 0 || status == 255)
+      break;
+    if (!(status & 128)) {
+      idle = 1;
+      break;
+    }
+  }
+  if (!idle) {
+    outb(0x1f6, 0xe0);
+    delay();
+    return 0;
+  }
+  outb(0x1f2, 0);
+  outb(0x1f3, 0);
+  outb(0x1f4, 0);
+  outb(0x1f5, 0);
+  outb(0x1f7, 0xec);
+  delay();
+  if (!ready(1)) {
+    outb(0x1f6, 0xe0);
+    delay();
+    return 0;
+  }
+  for (i = 0; i < 256; i++)
+    id[i] = inw(0x1f0);
+  outb(0x1f6, 0xe0);
+  delay();
+  if ((id[83] & (1u << 10)) && (id[100] | id[101] | id[102] | id[103])) {
+    u64 sectors = (u64)id[100] | ((u64)id[101] << 16) | ((u64)id[102] << 32) |
+                  ((u64)id[103] << 48);
+    return sectors << 9;
+  }
+  return ((u64)id[60] | ((u64)id[61] << 16)) << 9;
+}
 #define BOOKS 4
 #define BODY 4096
 #define BANK_SECTORS 34
@@ -350,11 +411,13 @@ struct Book {
 struct Store {
   u32 magic, generation, checksum, count;
   struct Book books[BOOKS];
-  u8 pad[800];
+  u32 book_version[BOOKS];
+  u8 pad[784];
 };
 _Static_assert(sizeof(struct Store) == BANK_SECTORS * 512, "disk layout");
 static struct Store store, previous;
 static int active = -1, storage_ok = 0, corrupt = 0;
+static u64 install_bytes;
 static int selected = -1, dirty = 0;
 static u32 hash(const struct Store *s) {
   const u8 *p = (const u8 *)s;
@@ -420,14 +483,38 @@ fail:
   s->checksum = oldhash;
   return 0;
 }
+static int commit_book(int id) {
+  u32 oldv = 0;
+  int bump = id >= 0 && id < BOOKS;
+  if (bump) {
+    oldv = store.book_version[id];
+    store.book_version[id] = oldv + 1;
+  }
+  if (!save()) {
+    if (bump)
+      store.book_version[id] = oldv;
+    return 0;
+  }
+  return 1;
+}
+static int commit_selected(void) { return commit_book(selected); }
+static int intent_from_text(const char *generated, const char *user);
 #include "ai/interface.h"
 #include "power.h"
 static void home(void) {
-  screen("HOME  /  What would you like to do?");
+  if (pixels) {
+    home_visible = 1;
+    face_on = 1;
+    face_capture = 0;
+    face_load(0);
+    face_clear();
+    graphics_face_paint();
+  } else
+    screen("HOME  /  What would you like to do?");
   color = 0xf3;
   line("Hi. Welcome to Nix.");
   color = 0xf0;
-  line("Your intent is the starting point.");
+  line("dios is root. Your intent is the starting point.");
   line(ai.ready ? "Local AI online / SmolLM2 135M / ask in plain language"
                 : "Local AI not loaded / deterministic commands available");
   line("  write a book called My Story    Create an Author workspace");
@@ -470,6 +557,9 @@ static void author(void) {
   color = 0xf3;
   line(store.books[selected].title);
   color = 0xf0;
+  say("Version ");
+  number(store.book_version[selected]);
+  line("");
   line(":save  :read  :undo  :home  /  prefix ':' text with '::' to write it");
   line("Lines remain in RAM until :save. :home saves before leaving.");
   line(":boot restarts / :die asks before shutdown / :menu opens NIX menu");
@@ -477,8 +567,10 @@ static void author(void) {
 }
 #include "ghost/shell.h"
 static const char *mouse_action(int x, int y) {
-  if (power_pending)
+  if (power_pending || pod_kind == POD_COUNTER)
     return (const char *)0;
+  if (face_on)
+    return face_hit(x, y);
   if (x >= 28 && x < 126 && y >= 700 && y < 744) {
     graphics_menu_toggle();
     return (const char *)0;
@@ -524,6 +616,86 @@ static const char *mouse_action(int x, int y) {
   }
   return (const char *)0;
 }
+static const char *intent_prompt(void);
+static void prompt(void) {
+  const char *intent = intent_prompt();
+  color = 0xf3;
+  say(intent                    ? intent
+      : power_pending           ? "[y/n] > "
+      : pod_kind == POD_COUNTER ? "counter > "
+      : selected >= 0          ? "  + "
+      : ghost_open             ? "ghost /memories > "
+                               : "nix > ");
+  color = 0xf0;
+}
+static void author_save(void) {
+  line(commit_selected()
+           ? "Saved and verified on disk."
+           : "Save failed. Text remains in RAM; do not close QEMU.");
+}
+static void author_show(void) {
+  author();
+  line(store.books[selected].text);
+}
+static void author_undo(void) {
+  struct Book *b = &store.books[selected];
+  if (!b->length)
+    return;
+  u32 n = b->length - 1;
+  while (n && b->text[n - 1] != '\n')
+    n--;
+  b->text[n] = 0;
+  b->length = n;
+  dirty = 1;
+  line("Last line removed in RAM. :save to commit.");
+}
+static void author_apply(char *s) {
+  struct Book *b = &store.books[selected];
+  if (s[0] == ':' && s[1] == ':')
+    s++;
+  u32 n = len(s);
+  if (b->length + n + 1 >= BODY) {
+    line("Manuscript full (4095 bytes). Export it on your Mac.");
+    return;
+  }
+  memcpy(b->text + b->length, s, n);
+  b->length += n;
+  b->text[b->length++] = '\n';
+  b->text[b->length] = 0;
+  dirty = 1;
+}
+static int leave_home(void) {
+  if (dirty && !commit_selected()) {
+    line("Save failed. Still in Author; your RAM draft is retained.");
+    return 0;
+  }
+  selected = -1;
+  home();
+  return 1;
+}
+static int leave_memories(void) {
+  if (dirty && !commit_selected()) {
+    line("Save failed. Your draft remains in Author.");
+    return 0;
+  }
+  selected = -1;
+  ghost_open = 0;
+  memories();
+  return 1;
+}
+static int leave_terminal(void) {
+  if (dirty && !commit_selected()) {
+    line("Save failed. Your draft remains in Author.");
+    return 0;
+  }
+  selected = -1;
+  ghost_open = 1;
+  ghost_screen();
+  return 1;
+}
+#include "pod.h"
+#include "net.h"
+#include "intent.h"
 static void execute(char *s) {
   char lower[256];
   copy(lower, s, sizeof(lower));
@@ -544,6 +716,35 @@ static void execute(char *s) {
     line("Please answer y or n. NIX is still running.");
     return;
   }
+  if (intent_on) {
+    if (eq(lower, "die") || eq(lower, "shutdown") || eq(lower, "home") ||
+        eq(lower, "help") || eq(lower, "boot")) {
+      line("Intent cancelled.");
+      intent_clear();
+    } else {
+      intent_answer(s, lower);
+      return;
+    }
+  }
+  if (shell_plan(s, lower))
+    return;
+  if (starts(lower, "focus ")) {
+    const char *name = lower + 6;
+    if (eq(name, "prompt")) {
+      ghost_open = 0;
+      face_load(0);
+      return;
+    }
+    if (eq(name, "terminal")) {
+      ghost_open = 1;
+      ghost_screen();
+      return;
+    }
+    if (linux_focus(name))
+      return;
+    line("That app is not running.");
+    return;
+  }
   if ((selected < 0 && (eq(lower, "die") || eq(lower, "shutdown"))) ||
       eq(lower, ":die")) {
     power_request();
@@ -559,27 +760,19 @@ static void execute(char *s) {
   }
   if ((selected < 0 && eq(lower, "show my memories")) ||
       eq(lower, ":memories")) {
-    if (dirty && !save()) {
-      line("Save failed. Your draft remains in Author.");
-      return;
-    }
-    selected = -1;
-    ghost_open = 0;
-    memories();
+    leave_memories();
     return;
   }
   if (eq(lower, ":terminal")) {
-    if (dirty && !save()) {
-      line("Save failed. Your draft remains in Author.");
-      return;
-    }
-    selected = -1;
-    ghost_open = 1;
-    ghost_screen();
+    leave_terminal();
     return;
   }
   if (ghost_open) {
     ghost_execute(s);
+    if (launch_author) {
+      launch_author = 0;
+      enter_author(0);
+    }
     return;
   }
   if (selected < 0 && (eq(lower, "terminal") || eq(lower, "open terminal") ||
@@ -589,58 +782,41 @@ static void execute(char *s) {
     return;
   }
   if (selected >= 0) {
-    struct Book *b = &store.books[selected];
     if (eq(s, ":save")) {
-      line(save() ? "Saved and verified on disk."
-                  : "Save failed. Text remains in RAM; do not close QEMU.");
+      author_save();
       return;
     }
     if (eq(s, ":home")) {
-      if (dirty && !save()) {
-        line("Save failed. Still in Author; your RAM draft is retained.");
-        return;
-      }
-      selected = -1;
-      home();
+      leave_home();
       return;
     }
     if (eq(s, ":read")) {
-      author();
-      line(b->text);
+      author_show();
       return;
     }
     if (eq(s, ":undo")) {
-      if (b->length) {
-        u32 n = b->length - 1;
-        while (n && b->text[n - 1] != '\n')
-          n--;
-        b->text[n] = 0;
-        b->length = n;
-        dirty = 1;
-        line("Last line removed in RAM. :save to commit.");
-      }
+      author_undo();
       return;
     }
     if (s[0] == ':' && s[1] != ':') {
       line("Unknown Author action. Use :save, :read, :undo, :home.");
       return;
     }
-    if (s[0] == ':' && s[1] == ':')
-      s++;
-    u32 n = len(s);
-    if (b->length + n + 1 >= BODY) {
-      line("Manuscript full (4095 bytes). Export it on your Mac.");
-      return;
-    }
-    memcpy(b->text + b->length, s, n);
-    b->length += n;
-    b->text[b->length++] = '\n';
-    b->text[b->length] = 0;
-    dirty = 1;
+    author_apply(s);
+    return;
+  }
+  if (eq(lower, "net") || eq(lower, "network")) {
+    net_show();
+    return;
+  }
+  if (starts(lower, "intent ")) {
+    if (!intent_from_text(lower, lower))
+      line("Intent type was not understood. Use: intent install <name>");
     return;
   }
   if (starts(lower, "ask ")) {
-    ai_answer(s + 4);
+    if (!resident_ask(lower + 4))
+      ai_answer(s + 4);
     return;
   }
   if (eq(lower, "ai status")) {
@@ -654,13 +830,23 @@ static void execute(char *s) {
     return;
   }
   if (eq(lower, "help")) {
-    line("Intent examples: write a book / write a book called <title>");
-    line("open <title> / show my memories / home / status / menu / boot / die");
-    line("Author: :save, :read, :undo, :home. Four books, 4095 bytes each.");
-    line("Ask in plain language or use ask <question>. ai status shows the "
-         "model.");
-    line("Ghost is the default terminal. Desktop, games and wallet are not "
-         "implemented.");
+    line("You can:");
+    line("  write a book called My Story");
+    line("  open My Story");
+    line("  show my memories");
+    line("  open terminal");
+    line("  ask a question");
+    line("  ask kernel");
+    line("  ask debian    ask ubuntu    ask centos");
+    line("  intent launch <name>");
+    line("  build count-words");
+    line("  run counter");
+    line("  net");
+    line("  home    status    boot    die");
+    line("One intent at a time. intent install <name> records a pod.");
+    line("NIX is not Linux. Linux 7.3.1 is the guest kernel.");
+    line("ask kernel opens #kernel. ask kernel again opens #kernel0.");
+    line("ask kernel -n linux opens #linux. Click a tab to switch.");
     return;
   }
   if (eq(lower, "show my memories") || eq(lower, "memories")) {
@@ -668,15 +854,27 @@ static void execute(char *s) {
     return;
   }
   if (eq(lower, "status")) {
-    line("Core 0.2 / x86 protected mode / single address space / C + assembly");
-    line("QEMU / framebuffer + PS/2 + serial + ATA PIO / offline");
+    line("Core 0.3 / x86-64 long mode / ring-3 pods / cooperative scheduling");
+    line(net_present()
+             ? "QEMU phenom / AMD SVM build guest / PS/2 + ATA / RTL8139"
+             : "QEMU phenom / AMD SVM build guest / PS/2 + ATA / no NIC");
     say("Committed generation: ");
     number(store.generation);
     line("");
-    line(ai.ready ? "Local SmolLM2 inference online. Process isolation is not "
-                    "implemented."
+    line(ai.ready ? "Local SmolLM2 is online. Answers are not authority."
                   : "Deterministic mode. Load a model boot bundle to enable "
                     "local AI.");
+    line("NIX is not Linux. Guest kernel target is Linux 7.3.1 from "
+         "kernel.org.");
+    say("Memory: ");
+    number((u32)(machine_ram() >> 20));
+    line(" MiB. NIX requires 8 GiB.");
+    if (install_bytes >= (10ULL << 30))
+      line("Install storage meets the 10 GiB minimum.");
+    else
+      line("An install needs 10 GiB of storage.");
+    linux_status_line();
+    line("Only dios confirms a plan. dios is root. The model cannot run tools.");
     return;
   }
   if (starts(lower, "open ")) {
@@ -688,7 +886,7 @@ static void execute(char *s) {
           t[j] += 32;
       if (eq(lower + 5, t)) {
         selected = (int)i;
-        author();
+        enter_author(0);
         return;
       }
     }
@@ -721,8 +919,7 @@ static void execute(char *s) {
     memset(b, 0, sizeof(*b));
     copy(b->title, title, 48);
     dirty = 1;
-    author();
-    line("Workspace created in RAM. Start writing, then :save.");
+    enter_author(1);
     return;
   }
   if (starts(lower, "play ") || starts(lower, "i want to play ")) {
@@ -763,16 +960,22 @@ void kernel_main(u32 magic, u32 info) {
   ai_boot(info);
   boot_pause();
   home();
+  install_bytes = identify_install_disk();
+  copy(face_ram_note, "8 GiB memory required. 10 GiB minimum to install.",
+       sizeof face_ram_note);
+  if (pixels)
+    graphics_face_paint();
   mouse_init();
+  arch_init();
+  pod_load();
   for (;;) {
-    color = 0xf3;
-    say(power_pending   ? "[y/n] > "
-        : selected >= 0 ? "  + "
-        : ghost_open    ? "ghost /memories > "
-                        : "nix > ");
-    color = 0xf0;
+    face_capture = 0;
+    prompt();
     char command[256];
     input(command, sizeof(command));
+    face_capture = face_on;
+    if (face_on && !confirm_plan && face_app == 0 && !starts(command, "focus "))
+      face_clear();
     execute(command);
   }
 }

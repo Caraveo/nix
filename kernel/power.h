@@ -1,7 +1,7 @@
 /* Power transitions stay deterministic and commit dirty Author work first. */
 static int power_pending = 0;
 static int power_commit(void) {
-  if (dirty && !save()) {
+  if (dirty && !commit_selected()) {
     line("Save failed. Power action cancelled; your draft remains in RAM.");
     return 0;
   }

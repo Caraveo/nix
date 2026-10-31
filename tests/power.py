@@ -29,12 +29,10 @@ with tempfile.TemporaryDirectory(prefix='nix-power-') as tmp:
     try:
         assert pixel(ROOT/'build/boot.ppm',512,384)==(0,0,0),'Centered black emblem missing'
         assert pixel(ROOT/'build/boot.ppm',200,384)==(250,250,252),'Unexpected splash background'
-        # Real pointer click opens bottom-left NIX menu, then selects Ghost.
-        move(vm,51-720,722-440);click(vm)
-        vm.command('screendump',{'filename':str(ROOT/'build/menu.ppm')})
-        assert pixel(ROOT/'build/menu.ppm',58,466)==(0,0,0),'Menu emblem missing'
-        move(vm,140-51,575-722);click(vm)
-        vm.expect('ghost /memories > ')
+        vm.command('screendump',{'filename':str(ROOT/'build/home.ppm')})
+        assert pixel(ROOT/'build/home.ppm',16,24)==(33,23,19),'Home field missing'
+        assert pixel(ROOT/'build/home.ppm',944,632)==(226,154,118),'Home prompt button missing'
+        vm.send('open terminal','ghost /memories > ')
         vm.send('die ; boot','[y/n] > ')
         vm.send('maybe','[y/n] > ')
         assert vm.process.poll() is None
@@ -67,4 +65,4 @@ with tempfile.TemporaryDirectory(prefix='nix-power-') as tmp:
         assert vm.process.poll() is None
         vm.send(':read','Keep this draft.')
     finally:vm.close()
-print('PASS: black centered splash, NIX menu mouse launch, die y/n, actual reboot, autosave, failure preservation')
+print('PASS: black centered splash, white prompt, die y/n, actual reboot, autosave, failure preservation')

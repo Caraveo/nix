@@ -7,7 +7,7 @@ static volatile u32 *pixels;
 /* Retain the scene beneath the software pointer, including while text redraws.
  */
 static u32 surface[1024 * 768];
-static int mouse_x = 720, mouse_y = 440, pointer_on = 0;
+static int mouse_x = 900, mouse_y = 700, pointer_on = 0;
 static const char pointer_shape[20][15] = {
     "X             ", "XX            ", "X.X           ", "X..X          ",
     "X...X         ", "X....X        ", "X.....X       ", "X......X      ",
@@ -119,13 +119,33 @@ static void draw_logo(int x, int y, const u8 *alpha, int w, int h,
         rect(x + i, y + j, 1, 1, blend(0, background, a));
     }
 }
+static void draw_mark(int x, int y, const u8 *alpha, int w, int h, u32 ink,
+                      u32 background) {
+  for (int j = 0; j < h; j++)
+    for (int i = 0; i < w; i++) {
+      u8 a = alpha[j * w + i];
+      if (a)
+        rect(x + i, y + j, 1, 1, blend(ink, background, a));
+    }
+}
+static void glyph_scaled(int x, int y, char ch, u32 fg, u32 bg, int scale) {
+  u8 c = (u8)ch;
+  if (c > 127 || scale < 1)
+    return;
+  for (int j = 0; j < 20; j++)
+    for (int i = 0; i < 12; i++) {
+      u8 alpha = font_alpha[c][j * 12 + i];
+      if (alpha)
+        rect(x + i * scale, y + j * scale, scale, scale, blend(fg, bg, alpha));
+    }
+}
 static void graphics_splash(void) {
   if (!pixels)
     return;
   rect(0, 0, 1024, 768, palette[15]);
   draw_logo((1024 - NIX_BOOT_W) / 2, (768 - NIX_BOOT_H) / 2, nix_boot_alpha,
             NIX_BOOT_W, NIX_BOOT_H, palette[15]);
-  label(368, 604, "STARTING NIX / CORE 0.2", palette[0], palette[15]);
+  label(368, 604, "STARTING NIX / CORE 0.3", palette[0], palette[15]);
   rect(392, 650, 240, 3, palette[7]);
   rect(392, 650, 80, 3, palette[0]);
 }
@@ -151,7 +171,7 @@ static void graphics_menu_toggle(void) {
   rounded_rect(28, 438, 304, 256, 16, 0xd7d7e1);
   rounded_rect(29, 439, 302, 254, 15, palette[15]);
   draw_logo(48, 454, nix_menu_alpha, NIX_MENU_W, NIX_MENU_H, palette[15]);
-  label(88, 455, "NIX / Core 0.2", palette[0], palette[15]);
+  label(88, 455, "NIX / Core 0.3", palette[0], palette[15]);
   const char *items[] = {"Home", "Memories", "Ghost terminal", "Restart / boot",
                          "Shut down / die"};
   for (int i = 0; i < 5; i++)
@@ -172,7 +192,7 @@ static int graphics_init(void) {
       vbe(2, 768);
       vbe(3, 32);
       vbe(4, 0x41);
-      pixels = (volatile u32 *)base;
+      pixels = (volatile u32 *)(u64)base;
       return 1;
     }
   return 0;
@@ -204,5 +224,320 @@ static void graphics_chrome(const char *tab) {
   rounded_rect(28, 706, 46, 32, 8, palette[15]);
   draw_logo(39, 710, nix_menu_alpha, NIX_MENU_W, NIX_MENU_H, palette[15]);
   label(88, 711, "NIX", palette[0], palette[7]);
-  label(790, 711, "CORE 0.2", palette[8], palette[7]);
+  label(790, 711, "CORE 0.3", palette[8], palette[7]);
+}
+/* Home matches the dark welcome: mark, heading, prompt bar. */
+static int face_on = 0;
+static int face_capture = 0;
+static int face_confirm = 0;
+static int face_linux = 0;
+enum { FACE_LOGS = 6, FACE_EXTRA = 4 };
+static char face_rows[12][78];
+static int face_rows_n, face_col, face_typed_n;
+static char face_typed[48];
+static char face_log[FACE_LOGS][12][78];
+static int face_log_n[FACE_LOGS];
+static int face_log_col[FACE_LOGS];
+static char face_log_typed[FACE_LOGS][48];
+static int face_log_typed_n[FACE_LOGS];
+static int face_app;
+static char face_extra_name[FACE_EXTRA][16];
+static int face_extra_n;
+static int face_tab_x[FACE_LOGS];
+static int face_tab_w[FACE_LOGS];
+static int face_tab_n;
+static char face_ram_note[72];
+enum {
+  FACE_BG = 0x211713,
+  FACE_CARD = 0x362720,
+  FACE_LINE = 0x4a382e,
+  FACE_INK = 0xf7edea,
+  FACE_MUTED = 0xcbb8ae,
+  FACE_PEACH = 0xe29a76,
+  FACE_PROMPT = 0x1e1713
+};
+static void graphics_face_prompt(void);
+static void graphics_face_paint(void);
+static void face_save(void) {
+  int a = face_app;
+  if (a < 0 || a >= FACE_LOGS)
+    return;
+  if (face_rows_n < 12)
+    face_rows[face_rows_n][face_col] = 0;
+  face_log_n[a] = face_rows_n;
+  face_log_col[a] = face_col;
+  for (int i = 0; i < 12; i++)
+    copy(face_log[a][i], face_rows[i], 78);
+  copy(face_log_typed[a], face_typed, 48);
+  face_log_typed_n[a] = face_typed_n;
+}
+static void face_restore(void) {
+  int a = face_app;
+  face_rows_n = face_log_n[a];
+  face_col = face_log_col[a];
+  for (int i = 0; i < 12; i++)
+    copy(face_rows[i], face_log[a][i], 78);
+  copy(face_typed, face_log_typed[a], 48);
+  face_typed_n = face_log_typed_n[a];
+}
+static void face_load(int app) {
+  if (app < 0 || app >= FACE_LOGS)
+    app = 0;
+  if (app != face_app)
+    face_save();
+  face_app = app;
+  face_restore();
+  if (face_on && pixels)
+    graphics_face_paint();
+}
+static void face_clear(void) {
+  face_rows_n = 0;
+  face_col = 0;
+  face_typed_n = 0;
+  face_typed[0] = 0;
+  for (int i = 0; i < 12; i++)
+    face_rows[i][0] = 0;
+  face_save();
+}
+static int face_find_extra(const char *name) {
+  for (int i = 0; i < face_extra_n; i++)
+    if (eq(face_extra_name[i], name))
+      return i;
+  return -1;
+}
+static int face_open_app(const char *name) {
+  int i = face_find_extra(name);
+  if (i < 0) {
+    if (face_extra_n >= FACE_EXTRA)
+      return -1;
+    i = face_extra_n++;
+    copy(face_extra_name[i], name, 16);
+  }
+  face_load(2 + i);
+  face_clear();
+  if (face_on && pixels)
+    graphics_face_paint();
+  return 2 + i;
+}
+static void face_close_app(const char *name) {
+  int i = face_find_extra(name);
+  int slot, from;
+  if (i < 0)
+    return;
+  slot = 2 + i;
+  for (int j = i; j + 1 < face_extra_n; j++) {
+    copy(face_extra_name[j], face_extra_name[j + 1], 16);
+    from = 3 + j;
+    face_log_n[2 + j] = face_log_n[from];
+    face_log_col[2 + j] = face_log_col[from];
+    face_log_typed_n[2 + j] = face_log_typed_n[from];
+    for (int r = 0; r < 12; r++)
+      copy(face_log[2 + j][r], face_log[from][r], 78);
+    copy(face_log_typed[2 + j], face_log_typed[from], 48);
+  }
+  face_extra_n--;
+  if (face_app == slot || face_app >= 2 + face_extra_n)
+    face_load(0);
+  else if (face_on && pixels)
+    graphics_face_paint();
+}
+static void face_pill(int x, int y, int w, const char *icon, const char *text,
+                      int on) {
+  u32 fill = on ? FACE_CARD : FACE_BG;
+  rounded_rect(x, y, w, 36, 12, FACE_LINE);
+  rounded_rect(x + 1, y + 1, w - 2, 34, 11, fill);
+  label(x + 14, y + 8, icon, FACE_PEACH, fill);
+  label(x + 32, y + 8, text, on ? FACE_INK : FACE_MUTED, fill);
+}
+static void face_pill_text(int x, int y, int w, const char *text, int on) {
+  u32 fill = on ? FACE_CARD : FACE_BG;
+  rounded_rect(x, y, w, 36, 12, FACE_LINE);
+  rounded_rect(x + 1, y + 1, w - 2, 34, 11, fill);
+  label(x + 16, y + 8, text, on ? FACE_INK : FACE_MUTED, fill);
+}
+static void face_tabs(void) {
+  int x = 24;
+  char label[20];
+  face_tab_n = 2;
+  face_tab_x[0] = x;
+  face_tab_w[0] = 118;
+  face_pill(x, 68, 118, "*", "Prompt", face_app == 0);
+  x += 126;
+  face_tab_x[1] = x;
+  face_tab_w[1] = 148;
+  face_pill(x, 68, 148, ">", "Terminal", face_app == 1);
+  x += 156;
+  for (int i = 0; i < face_extra_n && face_tab_n < FACE_LOGS; i++) {
+    int w;
+    label[0] = '#';
+    copy(label + 1, face_extra_name[i], 16);
+    w = 32 + (int)len(label) * 12;
+    if (w < 116)
+      w = 116;
+    if (x + w > 1000)
+      break;
+    face_tab_x[face_tab_n] = x;
+    face_tab_w[face_tab_n] = w;
+    face_pill_text(x, 68, w, label, face_app == 2 + i);
+    x += w + 8;
+    face_tab_n++;
+  }
+}
+static int face_tab_at(int x, int y) {
+  if (y < 68 || y >= 104)
+    return -1;
+  for (int i = 0; i < face_tab_n; i++)
+    if (x >= face_tab_x[i] && x < face_tab_x[i] + face_tab_w[i])
+      return i;
+  return -1;
+}
+static void face_heading(void) {
+  const char *lead = "Hi. Welcome to ";
+  const char *name = "Nix.";
+  int scale = 3;
+  int width = (int)(len(lead) + len(name)) * 12 * scale;
+  int x = (1024 - width) / 2;
+  int y = 300;
+  for (int i = 0; lead[i]; i++, x += 12 * scale)
+    glyph_scaled(x, y, lead[i], FACE_INK, FACE_BG, scale);
+  for (int i = 0; name[i]; i++, x += 12 * scale)
+    glyph_scaled(x + 6, y, name[i], FACE_PEACH, FACE_BG, scale);
+}
+static void graphics_face_paint(void) {
+  const char *kicker = "A COMPUTER THAT STARTS WITH YOU.";
+  const char *space = "Your space. Your intent.";
+  const char *foot = "Start with an idea. Make this space yours.";
+  if (!pixels)
+    return;
+  menu_visible = 0;
+  rect(0, 0, 1024, 768, FACE_BG);
+  draw_mark(24, 14, nix_menu_alpha, NIX_MENU_W, NIX_MENU_H, FACE_INK, FACE_BG);
+  label(56, 16, "nix", FACE_INK, FACE_BG);
+  label((1024 - (int)len(space) * 12) / 2, 16, space, FACE_MUTED, FACE_BG);
+  rect(0, 52, 1024, 1, FACE_LINE);
+  face_tabs();
+  if (face_app == 0 && !face_rows_n) {
+    label((1024 - (int)len(kicker) * 12) / 2, 250, kicker, FACE_PEACH, FACE_BG);
+    face_heading();
+    if (face_ram_note[0])
+      label((1024 - (int)len(face_ram_note) * 12) / 2, 430, face_ram_note,
+            FACE_MUTED, FACE_BG);
+  } else {
+    u32 paper = face_app == 0 ? FACE_BG : FACE_PROMPT;
+    int y = 132;
+    if (face_app != 0)
+      rounded_rect(24, 120, 976, 476, 16, FACE_PROMPT);
+    for (int i = 0; i < face_rows_n && y <= 560; i++, y += 22)
+      label(36, y, face_rows[i], FACE_INK, paper);
+    if (face_app >= 2 && !face_rows_n)
+      label(36, 160, "Linux 7.3.1 console", FACE_MUTED, FACE_PROMPT);
+  }
+  graphics_face_prompt();
+  if (face_app >= 2)
+    foot = "Type nix and Enter to leave this app.";
+  label((1024 - (int)len(foot) * 12) / 2, 728, foot, FACE_MUTED, FACE_BG);
+}
+static void graphics_face_prompt(void) {
+  int x = 28, y = 612, w = 968, h = 72;
+  int bx = 936, by = 626;
+  if (!pixels)
+    return;
+  rounded_rect(x, y, w, h, 18, FACE_LINE);
+  rounded_rect(x + 1, y + 1, w - 2, h - 2, 17, FACE_PROMPT);
+  draw_mark(x + 16, y + 24, nix_menu_alpha, NIX_MENU_W, NIX_MENU_H, FACE_PEACH,
+            FACE_PROMPT);
+  if (!face_typed_n && face_confirm)
+    label(x + 52, y + 26, "Type y to confirm, or n to cancel", FACE_PEACH,
+          FACE_PROMPT);
+  else if (!face_typed_n && face_app >= 2)
+    label(x + 52, y + 26, "linux >", FACE_INK, FACE_PROMPT);
+  else if (!face_typed_n && face_app == 1)
+    label(x + 52, y + 26, "Ghost terminal", FACE_MUTED, FACE_PROMPT);
+  else if (!face_typed_n)
+    label(x + 52, y + 26, "What would you like to do?", FACE_MUTED, FACE_PROMPT);
+  else {
+    int tx = x + 52;
+    for (int i = 0; i < face_typed_n; i++, tx += 12)
+      glyph(tx, y + 26, face_typed[i], FACE_INK, FACE_PROMPT);
+    rect(tx + 2, y + 28, 2, 16, FACE_INK);
+  }
+  rounded_rect(bx, by, 44, 44, 12, FACE_PEACH);
+  rect(bx + 20, by + 12, 4, 4, FACE_BG);
+  rect(bx + 16, by + 16, 4, 4, FACE_BG);
+  rect(bx + 24, by + 16, 4, 4, FACE_BG);
+  rect(bx + 12, by + 20, 4, 4, FACE_BG);
+  rect(bx + 28, by + 20, 4, 4, FACE_BG);
+  rect(bx + 20, by + 20, 4, 14, FACE_BG);
+}
+static void graphics_face_arrow(void) { graphics_face_prompt(); }
+static const char *face_hit(int x, int y) {
+  static char cmd[32];
+  int tab;
+  if (!face_on || face_confirm)
+    return 0;
+  tab = face_tab_at(x, y);
+  if (tab < 0)
+    return 0;
+  if (tab == 0)
+    return "focus prompt";
+  if (tab == 1)
+    return "focus terminal";
+  if (tab - 2 >= face_extra_n)
+    return 0;
+  copy(cmd, "focus ", 32);
+  {
+    u32 n = 6;
+    const char *s = face_extra_name[tab - 2];
+    while (*s && n + 1 < sizeof cmd)
+      cmd[n++] = *s++;
+    cmd[n] = 0;
+  }
+  return cmd;
+}
+static void face_sync(const char *s) {
+  if (!face_on || !pixels)
+    return;
+  u32 i = 0;
+  while (s[i] && i + 1 < sizeof(face_typed)) {
+    face_typed[i] = s[i];
+    i++;
+  }
+  face_typed[i] = 0;
+  face_typed_n = (int)i;
+  graphics_face_arrow();
+}
+/* The console keeps 12 finished lines. A full log scrolls. It must not
+   drop the new characters and leave blank rows. */
+static void face_make_room(void) {
+  if (face_rows_n < 12)
+    return;
+  for (int i = 1; i < 12; i++)
+    copy(face_rows[i - 1], face_rows[i], 78);
+  face_rows[11][0] = 0;
+  face_rows_n = 11;
+  face_col = 0;
+}
+static void face_note(char c) {
+  if (!face_on || !face_capture || !pixels)
+    return;
+  if (c == '\r' || c == '\b')
+    return;
+  if (c == '\n') {
+    face_make_room();
+    face_rows[face_rows_n][face_col] = 0;
+    face_rows_n++;
+    face_col = 0;
+    face_save();
+    graphics_face_paint();
+    return;
+  }
+  if (c < 32 || c > 126)
+    return;
+  if (face_col >= 72)
+    face_note('\n');
+  face_make_room();
+  if (face_rows_n >= 12)
+    return;
+  face_rows[face_rows_n][face_col++] = c;
+  face_rows[face_rows_n][face_col] = 0;
 }

@@ -8,6 +8,9 @@ headless:
 test:
 	python3 tests/smoke.py
 	python3 tests/power.py
+	python3 tests/phase4.py
+	python3 tests/intent.py
+	python3 tests/asm.py
 export:
 	python3 scripts/memory.py export build/memories.img --output exports
 

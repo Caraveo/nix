@@ -25,21 +25,43 @@ static int ai_poll_input(void) {
   return 0;
 }
 static void ai_boot(u32 info) {
+  /* stub.S moves the boot module to 256 MiB before the payload BSS wipe.
+     The original Multiboot descriptor does not survive that wipe. */
+  const u32 *moved = (const u32 *)0x17ff10ULL;
+  u32 start = moved[0];
+  u32 len = moved[1];
+  if (start && len && len <= 256U * 1024U * 1024U) {
+    ai_init((const void *)(u64)start, len);
+    if (ai.ready)
+      ai.poll = ai_poll_input;
+    return;
+  }
   if (!info)
     return;
-  const u32 *mb = (const u32 *)info;
+  const u32 *mb = (const u32 *)(u64)info;
   /* Multiboot v1: module count/address are words 5/6. QEMU loads the
      pinned bundle as an immutable boot module, separate from personal data. */
   if (!(mb[0] & 8) || mb[5] != 1 || !mb[6])
     return;
-  const u32 *module = (const u32 *)mb[6];
-  u32 start = module[0], end = module[1];
+  const u32 *module = (const u32 *)(u64)mb[6];
+  u32 end = module[1];
+  start = module[0];
   if (end <= start || end - start > 256U * 1024U * 1024U)
     return;
-  ai_init((const void *)start, end - start);
-  ai.poll = ai_poll_input;
+  ai_init((const void *)(u64)start, end - start);
+  if (ai.ready)
+    ai.poll = ai_poll_input;
+}
+static char intent_text[512];
+static void ai_keep(char c) {
+  u32 n = len(intent_text);
+  if (n + 1 < sizeof intent_text) {
+    intent_text[n] = c;
+    intent_text[n + 1] = 0;
+  }
 }
 static void ai_answer(const char *text) {
+  intent_text[0] = 0;
   if (!ai.ready) {
     line("Local model is not loaded. Attach the NIXAI boot bundle to enable "
          "AI.");
@@ -90,8 +112,10 @@ static void ai_answer(const char *text) {
     }
     for (u32 j = begin; j < end; j++) {
       u8 c = (u8)ai.vocabulary[j];
-      if (c == '\n' || (c >= 32 && c <= 126))
+      if (c == '\n' || (c >= 32 && c <= 126)) {
         put((char)c);
+        ai_keep((char)c);
+      }
     }
     if (!ai_forward(token, pos, 1)) {
       line("\nCancelled. Your saved work is unchanged.");
@@ -101,4 +125,5 @@ static void ai_answer(const char *text) {
   put('\n');
   if (!ended)
     line("[Response limit reached - ask for a shorter answer.]");
+  intent_from_text(intent_text, text);
 }

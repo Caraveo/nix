@@ -1,37 +1,40 @@
 ![NIX — The Prompt Operating System](assets/brand/NIX%20prompt%20operating%20system%20banner.png)
 
-# NIX / Core 0.2
+# NIX / Core 0.3
 
-**Version 0.2 · Early bootable MVP · Intel Mac / QEMU**
+**Version 0.3 · Long mode · QEMU phenom**
 
 [**Why Nix?**](marketing.md) — The story, the experience, and the conceptual phases behind the project.
 
 A bootable first slice of the [NIX blueprint](https://core-nix.com/): a prompt-first environment and an Author workspace with persistent Memories. This repository's original `index.html` is the design reference.
 
-**An actual freestanding C/assembly kernel, booted directly by QEMU.** It does not run Linux, a browser, or a host web application. It currently enters 32-bit protected mode on an emulated x86 PC, including your Intel Mac's QEMU x86_64 machine. It is an early kernel prototype, not the proposed 64-bit Rust/C microkernel yet.
+**An actual freestanding C/assembly kernel, booted directly by QEMU.** NIX is the host and is not Linux. A 32-bit Multiboot stub switches to 64-bit long mode and runs the kernel. Author runs as a ring-3 pod. A dios-confirmed build runs in an AMD SVM guest with nested paging. `dios` is the root principal. The named physical PC is [NIX Station 1](docs/nix-station-1.md). This tree has not booted that PC. Acceptance is QEMU.
+
+The intended NIX system combines the machine startup role of UEFI/BIOS with the operating system in one environment owned by dios. NIX owns the machine; Linux kernels are optional guest instances copied from a built template. The current implementation enters through Multiboot. A native UEFI startup path and physical hardware boot remain future work.
 
 ## NIX running in QEMU
 
 ![NIX Core 0.2 Home running in a QEMU window on an Intel Mac](docs/screenshots/home-ai.png)
 
-*Core 0.2 running in QEMU: rounded interface corners, a visible mouse pointer, prompt-first Home, Author entry points, and local Memories. Updated October 30, 2026. [Original macOS window capture](docs/screenshots/nix-core-0.1-qemu.png).*
+*Checked-in captures are from the Core 0.2 window. The live status line is Core 0.3. Rounded corners, the pointer, Home, and Author are unchanged. [Original macOS window capture](docs/screenshots/nix-core-0.1-qemu.png).*
 
-| Detail | Core 0.2 |
+| Detail | Core 0.3 |
 | --- | --- |
-| Stage | Early bootable operating-system prototype |
-| Kernel | Freestanding C and assembly; 32-bit x86 protected mode; single address space |
+| Stage | Long-mode kernel with one native pod and one hypervisor build guest |
+| Kernel | Freestanding C and assembly; x86-64 long mode; ring-3 pods; cooperative, interrupts masked |
 | Tested host | Intel Mac running QEMU 11.1.3 |
-| Virtual machine | Emulated x86 PC, TCG software acceleration, 512 MiB RAM |
+| Virtual machine | `-machine pc,accel=tcg -cpu phenom`, 512 MiB RAM, std VGA, IDE, PS/2, no NIC |
 | Display | 1024 × 768 framebuffer, rounded panels and tab, Ghost-inspired Light interface, Hack typography |
 | Input | PS/2 keyboard and mouse; software pointer; clickable Home shortcuts and toolbar |
 | Home | Local AI answers in plain language, deterministic writing and Memories, Ghost on request |
-| Local AI | SmolLM2-135M-Instruct; Q8 weights; SSE2 CPU inference inside Core; 256-token context; 48-token response cap |
-| Author | Four manuscripts; up to 4095 bytes each; append, read, undo, save, and reopen |
+| Local AI | SmolLM2-135M-Instruct; Q8 weights; SSE2 CPU inference inside Core; 256-token context; 48-token response cap. Answers are not authority |
+| Author | Ring-3 pod. Four manuscripts; up to 4095 bytes each; append, read, undo, save, and reopen |
 | Persistence | 4 MiB virtual disk; alternating checksummed snapshots; previous-version recovery; text export |
-| Terminal | Ghost Core edition: Memory commands, quoting, command chains, and persistent appends |
-| Connectivity | No virtual network device attached |
-| Verified behavior | Boot, keyboard input, save/restart, corruption recovery, Ghost commands, export, and missing-disk handling |
-| Future work | Multi-turn AI context, validated tool plans, process isolation, full Ghost process/PTY support, x86-64, broader drivers, and isolated Pods |
+| Build | Local catalog with one recipe, `count-words`. dios confirms. AMD SVM + nested paging. Reuse and rollback |
+| Terminal | Ghost Core edition: Memory commands, quoting, command chains, and persistent appends. `whoami` prints `dios` |
+| Connectivity | No virtual network device. `fetch` is denied |
+| Verified behavior | `tests/smoke.py`, `tests/power.py`, and `tests/phase4.py` on QEMU phenom |
+| Not in this tree | Physical boot, board drivers, UEFI, a general compiler, preemption, and model tool use |
 
 This version demonstrates the first working slice of NIX. The full operating-system vision and its conceptual phases are described in [Why Nix?](marketing.md).
 
@@ -43,14 +46,14 @@ This version demonstrates the first working slice of NIX. The full operating-sys
 
 ![A language model answering inside the NIX QEMU guest](docs/screenshots/ai.png)
 
-**Core 0.2 bundles SmolLM2-135M-Instruct with an in-guest CPU inference engine.**
+**Core runs SmolLM2-135M-Instruct with an in-guest CPU inference engine.**
 Ask an ordinary question at Home, or use `ask <question>`. `ai status` shows the
 loaded model. Escape cancels generation. The launcher attaches the verified
 132 MiB model boot module automatically when present; the guest has no network
 device and needs no host model server or API key.
 
-[Download the model-included Core 0.2 release](https://github.com/Caraveo/nix/releases/tag/v0.2).
-For the latest source changes, `make package` produces a ZIP containing the kernel,
+The last tagged model package is the [Core 0.2 release](https://github.com/Caraveo/nix/releases/tag/v0.2). This tree is 0.3 and is not that package.
+For the source tree, `make package` produces a ZIP containing the kernel,
 model, licenses, and launch scripts. From a fresh source checkout, prepare the model once:
 
 ```sh
@@ -81,7 +84,9 @@ brew install qemu lld
 ./scripts/run.sh
 ```
 
-Run these commands from this repository. You can also double-click `Run-NIX.command` after installing dependencies. The first run builds `build/core.elf` and creates a **4 MiB** `build/memories.img`. Later runs preserve that disk. QEMU uses software emulation (TCG) for reliable protected-mode boot; no HVF or nested virtualization is required. The virtual machine has 512 MiB RAM and no network device. The bundled model is loaded as an immutable Multiboot module, separate from the persistent Memories disk.
+Run these commands from this repository. You can also double-click `Run-NIX.command` after installing dependencies. The first run builds `build/core.elf` and creates a **4 MiB** `build/memories.img`. Later runs preserve that disk. QEMU uses TCG and `-cpu phenom` because this QEMU's TCG can execute AMD SVM and cannot execute Intel VMX. The windowed virtual machine has 8 GiB RAM and a separate sparse 10 GiB install disk on IDE slave. Headless mode uses 512 MiB RAM. Both have no network device. NIX requires 8 GiB of memory; 10 GiB is the minimum install disk size. This QEMU build has no user-mode network backend. Catalog `fetch` stays denied. The host does not need nested virtualization. The bundled model is loaded as an immutable Multiboot module, separate from the persistent Memories disk. The boot stub copies that module to 256 MiB before it clears kernel memory, which is what keeps the weights intact. A boot without the bundle leaves local AI off.
+
+The built Linux 7.3.1 image is a reusable template: each new kernel instance copies it into private RAM, with its own 48 MiB RAM, 16 MiB guest disk, and saved CPU state. `ask kernel`, then `y`, opens `#kernel`. `ask kernel again` opens `#kernel0`, then `#kernel1`; `ask kernel -n linux` opens `#linux`. Up to four guests can stay open. Click Prompt, Terminal, or a kernel tab to switch; guests pause when left. Type `nix` and Enter to close the selected guest. A repeated name without an explicit replacement request is preserved. The guest has a small shell, not a distribution root or package manager.
 
 Click inside QEMU to type. Release captured input with **Control + Option + G** (QEMU's macOS grab shortcut), or close its window to quit. Use `die` (or its `shutdown` alias) and confirm with `y` for a clean exit. `n` cancels. Use `boot` to restart the guest. For a serial session in your Mac terminal:
 
@@ -133,6 +138,7 @@ nix > open First Light
 Close QEMU, launch it again, and reopen `First Light`: saved text remains on the virtual disk.
 
 - Home understands `open terminal` / `ghost`, `write a book`, `write a book called <title>`, `open <title>`, `show my memories`, `help`, `status`, `home`, and `shutdown`.
+- `build count-words` asks dios to confirm, then installs the catalog pod. A second `build count-words` reuses it. `run counter` counts words. `fetch` stays denied. `rollback counter` restores the previous pod. Details and the hardware target are in [NIX Station 1](docs/nix-station-1.md).
 - Author appends one line per Enter. `:save` commits, `:read` shows the manuscript, `:undo` removes the last line in RAM, and `:home` saves before returning. Start a line with `::` to write a literal leading colon.
 - Four manuscripts, 47 ASCII characters per title, 4095 bytes per manuscript. Input is ASCII, US keyboard layout, 255 characters per line. The current editor appends lines; it does not support arbitrary cursor editing. Text changes stay in RAM until a successful save.
 - Book creation occupies a slot in RAM and becomes persistent at the next save. No deletion command yet.
@@ -156,7 +162,7 @@ ghost /memories > exit
 ```
 
 Supported: `help`, `list`/`ls`, `cat`/`spill`, `edit`, `echo`/`print`, `pwd`,
-`cd /memories`, `whoami`, `hostname`, `uname`, `clear`, `exit`, quoted words,
+`cd /memories`, `whoami` (prints `dios`; dios is root), `hostname`, `uname`, `clear`, `exit`, quoted words,
 `;`, `&&`, `||`, and explicit `echo ... >> "Existing title"` appends. Appends
 commit through the Memory store and report a disk error without silently losing
 the prior text. `edit <title>` opens Author. Commands are case-sensitive.
@@ -183,7 +189,7 @@ The exporter refuses to overwrite existing files. For another export, choose a n
 
 ## Implementation and verification
 
-`kernel/boot.S` supplies a Multiboot v1 header and stack. `kernel/core.c` contains the deterministic intent router, framebuffer interface (with VGA text fallback), PS/2 keyboard and serial input, polling ATA PIO, and Memory store. `kernel/linker.ld` links the kernel at 1 MiB. QEMU's Multiboot loader loads the ELF via `-kernel`; this is **not** a standalone UEFI/ISO installer. Build needs Clang and `ld.lld`; set `CC` or `LD` to override discovery.
+`kernel/stub.S` is the Multiboot v1 image QEMU loads. It switches to long mode and jumps to the ELF64 kernel at 2 MiB. `kernel/core.c` contains the intent router, framebuffer (with VGA text fallback), PS/2 input, polling ATA PIO, and the Memory store. `kernel/pod.h` maps ring-3 pods and runs the build guest. QEMU's `-kernel` path is **not** a UEFI or ISO installer. Build needs Clang and `ld.lld`; set `CC` or `LD` to override discovery.
 
 Two alternating 34-sector banks hold complete Memory snapshots. A save writes and flushes the target bank's body, commits its header, flushes, then rereads and validates a checksum. Boot selects the highest valid generation, falling back when a bank is damaged. The checksum detects accidental corruption; it is not cryptographic integrity or encryption. Both banks invalid with nonzero headers disables saves to preserve recovery evidence. There is no general-purpose filesystem or robust storage hardware support.
 
@@ -191,19 +197,17 @@ Two alternating 34-sector banks hold complete Memory snapshots. A save writes an
 ./scripts/build.sh
 python3 tests/smoke.py
 python3 tests/power.py
+python3 tests/phase4.py
 ```
 
 The renderer directly configures QEMU Standard VGA through the Bochs VBE interface at 1024x768, discovers the framebuffer through PCI, and draws a software cursor. The antialiased Hack glyph atlas is embedded in `kernel/font.h`, with the font and license retained in `third_party/hack`. `scripts/generate_font.py` regenerates it with Pillow; ordinary builds need no Pillow dependency.
 
-The integration test uses a disposable disk and real QEMU boots. It checks rounded corner pixels, PS/2 mouse movement, click-to-open Ghost, pointer trail removal, PS/2 keyboard input, serial commands, writing, saving, a full process restart, exclusion of unsaved edits, fallback after deliberately corrupting the latest bank, Ghost quoting/chains/Memory appends, shutdown, and missing-disk behavior. It never mutates your manuscript disk. Framebuffer captures are generated at `build/home.ppm` and `build/ghost.ppm`.
+`tests/smoke.py` and `tests/power.py` use a disposable disk and real QEMU boots. They check rounded corner pixels, PS/2 mouse movement, click-to-open Ghost, pointer trail removal, PS/2 keyboard input, serial commands, writing, saving, a full restart, exclusion of unsaved edits, fallback after deliberately corrupting the latest bank, Ghost quoting, chains, Memory appends, shutdown, and missing-disk behavior. `tests/phase4.py` checks the dios confirm, the nested-page-fault probe, install, reuse, a denied Memory, a granted Memory the guest never sees, rollback, and a pod fault that leaves the shell running. None of these tests mutates `build/memories.img`. Framebuffer captures are generated at `build/home.ppm` and `build/ghost.ppm`.
 
-Verified locally on an Intel Mac with Clang 17, LLD 21, and QEMU 11.1.3: all
-integration assertions passed, including the 1024x768 framebuffer capture and
-host text export. GitHub Actions is configured for the same test; the initial
-remote run failed during workflow startup before creating any test jobs.
+Verified locally on an Intel Mac with Clang 17 and QEMU 11.1.3: `tests/smoke.py`, `tests/power.py`, and `tests/phase4.py` passed, including the 1024×768 framebuffer checks and host text export. GitHub Actions runs those three tests. This session did not watch a remote run.
 
 ## Boundary of this MVP
 
-Implemented: boot, Ghost-style framebuffer interface, rounded corners, PS/2 mouse, local model loading and CPU inference, plain-language AI answers with cancellation, deterministic intent routing, writing workspace, explicit save, restart persistence, previous-generation recovery, host text export, serial diagnostics, and the Ghost terminal port.
+Implemented: long-mode boot under QEMU phenom, the framebuffer and PS/2 pointer, local CPU inference, deterministic intent routing, Author as a ring-3 pod, save and restart, bank recovery, host export, the Ghost port, and a dios-confirmed SVM build guest for the one catalog recipe. dios is root.
 
-Still needed for the full blueprint: x86-64 long mode, Rust components, paging/process isolation, scheduler/IPC/capabilities, UEFI boot, window compositor, larger-model support/OpenCode integration, real isolated Pods, networking, USB/NVMe, guest virtualization, accelerated graphics and games. All code currently executes at kernel privilege in one address space with interrupts disabled and polled I/O. The Author workspace is a built-in application, not an isolated Pod. The model is bundled separately as a verified boot module. Autonomous tool execution and automatic code generation are not implemented. The interface supports a PS/2 pointer and selected click targets; window dragging, resizing, and arbitrary text selection are not implemented.
+Still outside this tree: booting NIX Station 1, UEFI, Rust, preemptive scheduling, a general compiler, OpenCode, networking, USB, NVMe, Wi-Fi, audio, and a discrete or integrated GPU driver. Interrupts stay masked. The model stays in the kernel and cannot confirm a plan. The build guest's 2 MiB map is writable and executable; nested paging is the boundary. Native pods refuse a segment that is both writable and executable. The pointer hits selected targets only. Window dragging, resizing, and arbitrary text selection are not implemented.
