@@ -6,7 +6,9 @@
 
 [**Why Nix?**](marketing.md) — The story, the experience, and the conceptual phases behind the project.
 
-A bootable first slice of the [NIX blueprint](https://core-nix.com/): a prompt-first environment and an Author workspace with persistent Memories. This repository's original `index.html` is the design reference.
+A bootable first slice of NIX: a prompt-first environment and an Author workspace with persistent Memories. The owner-adopted [architecture blueprint](blueprint/README.md) contains the executive architecture and phases 0–10. The original `index.html` and website are supporting design references.
+
+**Core is the operating system. NIX is its prompt-led host experience.** The [repository contracts](blueprint/architecture.md) and [phase plan](blueprint/phases.md) distinguish implemented prototypes from the target architecture and its acceptance gates.
 
 **An actual freestanding C/assembly kernel, booted directly by QEMU.** NIX is the host and is not Linux. A 32-bit Multiboot stub switches to 64-bit long mode and runs the kernel. Author runs as a ring-3 pod. A dios-confirmed build runs in an AMD SVM guest with nested paging. `dios` is the root principal. The named physical PC is [NIX Station 1](docs/nix-station-1.md). This tree has not booted that PC. Acceptance is QEMU.
 
