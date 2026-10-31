@@ -224,6 +224,7 @@ linux_vmrun:
   push %rsi
   sub $520, %rsp
   fxsave (%rsp)
+  fxrstor linux_fpu(%rip)
   mov %rdi, %rax
   mov 528(%rsp), %rsi
   mov 0(%rsi), %rcx
@@ -241,6 +242,7 @@ linux_vmrun:
   mov 40(%rsi), %rdi
   mov 32(%rsi), %rsi
   .byte 0x0f, 0x01, 0xd8
+  fxsave linux_fpu(%rip)
   mov 528(%rsp), %rax
   mov %rcx, 0(%rax)
   mov %rdx, 8(%rax)

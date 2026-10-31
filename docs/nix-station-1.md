@@ -28,7 +28,7 @@ The disk is IDE. Input is PS/2. `scripts/run.sh` and the tests use this machine.
 
 There is one human principal, `dios`. `dios` is root. Ghost `whoami` prints `dios`. A plan runs only after dios types `y` or `yes`. The model cannot confirm. Its answers are not commands.
 
-The acceptance VM has no NIC. This QEMU build has no user-mode network backend, so the launcher does not attach one. `fetch` answers `Network denied. The catalog is local.` The catalog in this milestone is the recipe `count-words`, carried inside the build guest and checked for the ELF magic before install. There is no general compiler and no opt-in catalog download.
+The small acceptance VMs and default headless launcher have no NIC. The full Linux runtime uses separate PIO-only NE2000 PCI adapters backed by private QEMU NAT networks. NIX exposes only the selected intent's adapter through its virtual PCI view; the adapter cannot DMA into host RAM. `fetch` answers `Network denied. The catalog is local.` The catalog in this milestone is the recipe `count-words`, carried inside the build guest and checked for the ELF magic before install. The native catalog has no general compiler and no opt-in download. A full Linux intent has a separate Debian userspace, package tools, and network access; those permissions do not grant access to Memories.
 
 Native pods are ring 3. A loadable segment that is both writable and executable is rejected. Code pages are executable. Data and the stack are not executable. The pod window is the 2 MiB at `0x2000000`. The top 32 KiB is stack, so a 4 KiB buffer fits. A fault in a pod prints `Pod faulted. NIX is still running.` and returns to the shell. The kernel does not restart that pod.
 

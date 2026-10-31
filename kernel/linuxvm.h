@@ -15,7 +15,24 @@ struct GuestBudget {
   u64 ram_bytes;
   u64 disk_bytes;
   u64 sink;
+  int full;
 };
+#ifndef LINUX_FULL_INITRD_BYTES
+#define LINUX_FULL_INITRD_BYTES 0
+#endif
+#define LINUX_TEMPLATE_ADDR 0xb0000000ULL
+#define LINUX_SLOT_BYTES (576ULL << 20)
+static u32 linux_seed_next;
+u8 linux_fpu[512] __attribute__((aligned(16)));
+static u64 machine_ram(void);
+static int linux_rootfs_ready(void) {
+#if LINUX_FULL_INITRD_BYTES > 0
+  const u8 *p = (const u8 *)LINUX_TEMPLATE_ADDR;
+  return machine_ram() >= (8ULL << 30) && p[0] == 0x1f && p[1] == 0x8b;
+#else
+  return 0;
+#endif
+}
 static struct GuestBudget linux_budget;
 static int linux_have_budget;
 static int linux_saw_online;
@@ -92,7 +109,7 @@ static int linux_geometry(u64 *base, u64 *sink_out) {
   u64 total = machine_ram();
   u64 limit, sink, reserve;
   u32 mod;
-  const u64 slice = 64ULL << 20;
+  const u64 slice = LINUX_SLOT_BYTES;
   if (total < (64ULL << 20)) {
     line("Not enough is free for a dynamic guest. It was not started.");
     return 0;
@@ -148,7 +165,7 @@ static int text_has(const char *hay, const char *needle) {
 static char uart_line[120];
 static unsigned uart_ln;
 static u8 uart_ier, uart_lcr, uart_mcr, uart_scr, uart_dll, uart_dlh;
-static u8 uart_rx[64];
+static u8 uart_rx[4096];
 static unsigned uart_rr, uart_wc;
 static u8 ata_sector[512];
 static u8 ata_err, ata_count, ata_lba0, ata_lba1, ata_lba2, ata_drive;
@@ -174,6 +191,8 @@ static void uart_reset(void) {
 static void uart_tx(u8 ch) {
   if (ch == '\r')
     return;
+  if (ata_budget && ata_budget->full)
+    put((char)ch);
   if (ch != '\n') {
     if (ch >= 32 && ch <= 126 && uart_ln + 1 < sizeof uart_line)
       uart_line[uart_ln++] = (char)ch;
@@ -181,7 +200,8 @@ static void uart_tx(u8 ch) {
   }
   uart_line[uart_ln] = 0;
   note_line(uart_line);
-  line(uart_line);
+  if (!ata_budget || !ata_budget->full)
+    line(uart_line);
   uart_ln = 0;
 }
 static u8 uart_msr(void) {
@@ -221,7 +241,7 @@ static u8 uart_in(u16 port) {
   if (off == 1)
     return dlab ? uart_dlh : uart_ier;
   if (off == 2)
-    return ((uart_ier & 1) && uart_wc) ? 0x04 : 0x01;
+    return ((uart_ier & 1) && uart_wc) ? 0x04 : (uart_ier & 2) ? 0x02 : 0x01;
   if (off == 3)
     return uart_lcr;
   if (off == 4)
@@ -417,6 +437,8 @@ static void ata_out(u16 port, u32 size, u32 value) {
   }
 }
 
+#include "linux_devices.h"
+
 static int translate(const struct GuestBudget *b, struct Vmcb *vm, u64 gva,
                      u64 *out) {
   u64 table, e, shift, idx, page;
@@ -494,6 +516,8 @@ static u32 io_length(const u8 *op) {
     return i + 2;
   if (i < 8 && op[i] >= 0xec && op[i] <= 0xef)
     return i + 1;
+  if (i < 8 && op[i] >= 0x6c && op[i] <= 0x6f)
+    return i + 1;
   return 0;
 }
 static void advance_io(const struct GuestBudget *b, struct Vmcb *vm) {
@@ -501,6 +525,7 @@ static void advance_io(const struct GuestBudget *b, struct Vmcb *vm) {
   u64 rip = vm->save.rip;
   u8 op[8];
   u32 n;
+  vm->control.int_state = 0; /* The emulated instruction completes STI shadow. */
   if (nrip > rip && nrip <= rip + 15) {
     vm->save.rip = nrip;
     return;
@@ -584,6 +609,8 @@ static void handle_msr(struct Vmcb *vm, u64 *gpr, int write) {
 }
 static void port_access(struct Vmcb *vm, u32 size, u16 port, int is_in) {
   u32 value = (u32)vm->save.rax;
+  if (linux_device_port(vm, size, port, is_in))
+    return;
   if (!size)
     size = 1;
   if (size > 4)
@@ -605,6 +632,40 @@ static void port_access(struct Vmcb *vm, u32 size, u16 port, int is_in) {
   }
   if (is_in)
     vm->save.rax = (vm->save.rax & ~0xffULL) | 0xff;
+}
+
+static int linux_string_io(const struct GuestBudget *b, struct Vmcb *vm,
+                           u64 *gpr, u64 info, u32 size, u16 port) {
+  int input = info & 1;
+  int repeat = info & 8;
+  u32 addr_size = (u32)((info >> 7) & 7);
+  u64 mask = addr_size == 1 ? 0xffff : addr_size == 2 ? 0xffffffffULL : ~0ULL;
+  u64 count = repeat ? gpr[GPR_RCX] & mask : 1;
+  u64 *index = &gpr[input ? GPR_RDI : GPR_RSI];
+  u64 segment = 0;
+  if (!(vm->save.efer & 0x400))
+    segment = input ? vm->save.es.base : vm->save.ds.base;
+  for (u64 n = 0; n < count; n++) {
+    u8 *ptr[4];
+    u32 value = 0;
+    for (u32 j = 0; j < size; j++) {
+      u64 gpa;
+      if (!translate(b, vm, segment + (*index & mask) + j, &gpa) ||
+          !(ptr[j] = guest_ptr(b, gpa, 1))) return 0;
+      if (!input) value |= (u32)*ptr[j] << (j * 8);
+    }
+    u64 saved = vm->save.rax;
+    if (!input) vm->save.rax = value;
+    port_access(vm, size, port, input);
+    if (input) for (u32 j = 0; j < size; j++)
+      *ptr[j] = (u8)(vm->save.rax >> (j * 8));
+    vm->save.rax = saved;
+    *index = (*index + ((vm->save.rflags & 0x400) ? -(u64)size : size)) & mask;
+    if (repeat) gpr[GPR_RCX] = (gpr[GPR_RCX] - 1) & mask;
+    if (n == 4095 && n + 1 < count) return 1; /* Yield before continuing REP. */
+  }
+  advance_io(b, vm);
+  return 1;
 }
 
 static int map_guest(const struct GuestBudget *b) {
@@ -635,11 +696,12 @@ static int map_guest(const struct GuestBudget *b) {
 static int load_linux(const struct GuestBudget *b) {
   const u8 *image = linux_image;
   u64 image_len = (u64)(linux_image_end - linux_image);
-  u64 init_len = (u64)(linux_initrd_end - linux_initrd);
+  const u8 *init_image = b->full ? (const u8 *)LINUX_TEMPLATE_ADDR : linux_initrd;
+  u64 init_len = b->full ? LINUX_FULL_INITRD_BYTES : (u64)(linux_initrd_end - linux_initrd);
   u32 sects, payload_off;
   u64 payload, init_gpa;
   u8 *boot, *cmd, *gdtp, *dest;
-  char cmdline[180];
+  char cmdline[320];
   char *cur;
   u64 *gdt;
   if (image_len < 0x10000 || image[0x202] != 'H' || image[0x203] != 'd' ||
@@ -675,7 +737,9 @@ static int load_linux(const struct GuestBudget *b) {
   {
     const char *fixed =
         "console=ttyS0 earlyprintk=serial,ttyS0,115200 noapic nolapic nohpet "
-        "pci=off acpi=off lpj=1000000 i8042.nokbd i8042.noaux rdinit=/init "
+        "pci=conf1 acpi=off lpj=1000000 i8042.nokbd i8042.noaux rdinit=/init "
+        "initramfs_options=size=384M "
+        "random.trust_bootloader=on "
         "nix.disk=0x";
     while (*fixed && cur + 1 < cmdline + sizeof cmdline)
       *cur++ = *fixed++;
@@ -689,6 +753,22 @@ static int load_linux(const struct GuestBudget *b) {
   *(u32 *)(boot + 0x218) = (u32)init_gpa;
   *(u32 *)(boot + 0x21c) = (u32)init_len;
   *(u32 *)(boot + 0x228) = 0x20000;
+  if (b->full && linux_seed_next < 1024) {
+    u8 *seeds = (u8 *)0xbf000000ULL;
+    int valid_seed = 1;
+    for (int i = 0; i < 8; i++)
+      if (seeds[i] != (u8)"NIXRNG01"[i]) valid_seed = 0;
+    if (valid_seed) {
+      u8 *setup = guest_ptr(b, 0x30000, 80);
+      *(u64 *)setup = 0;
+      *(u32 *)(setup + 8) = 9; /* Linux SETUP_RNG_SEED. */
+      *(u32 *)(setup + 12) = 64;
+      u8 *seed = seeds + 8 + (u64)linux_seed_next++ * 64;
+      memcpy(setup + 16, seed, 64);
+      wipe(seed, 64);
+      *(u64 *)(boot + 0x250) = 0x30000;
+    }
+  }
   if (*(u32 *)(boot + 0x214) == 0)
     *(u32 *)(boot + 0x214) = 0x100000;
   boot[0x1e8] = b->disk_bytes ? 4 : 3;
@@ -712,7 +792,7 @@ static int load_linux(const struct GuestBudget *b) {
       e820[3].type = 2;
     }
   }
-  memcpy(guest_ptr(b, init_gpa, init_len), linux_initrd, init_len);
+  memcpy(guest_ptr(b, init_gpa, init_len), init_image, init_len);
   gdt = (u64 *)gdtp;
   gdt[0] = 0;
   gdt[1] = 0x00cf9a000000ffffULL;
@@ -732,6 +812,9 @@ static void program_vmcb(const struct GuestBudget *b, struct Vmcb *vm, u64 rip) 
   vm->control.msrpm_base_pa = (u64)svm_msrpm;
   vm->control.asid = 2;
   vm->control.tlb_ctl = 1;
+  /* Physical interrupts obey NIX's masked IF. Guest interrupts are injected
+     from its private PIC, rather than taking host device IRQs directly. */
+  vm->control.int_ctl = 1u << 24;
   vm->control.nested_ctl = 1;
   vm->control.nested_cr3 = (u64)linux_pml4;
   vm->save.es = data;
@@ -757,6 +840,8 @@ static void program_vmcb(const struct GuestBudget *b, struct Vmcb *vm, u64 rip) 
   (void)b;
 }
 static int linux_tab_slot(int tab);
+static int linux_key_ctrl;
+static int linux_key_extended;
 static int poll_host(void) {
   int c = -1;
   if (inb(0x3fd) & 1) {
@@ -801,8 +886,32 @@ static int poll_host(void) {
         return 7;
       return 0;
     }
+    if (scan == 0xe0) {
+      linux_key_extended = 1;
+      return 0;
+    }
     if (scan == 42 || scan == 54) {
       key_shift = 1;
+      return 0;
+    }
+    if (scan == 29 || scan == 157) {
+      linux_key_ctrl = scan == 29;
+      linux_key_extended = 0;
+      return 0;
+    }
+    if (linux_key_extended) {
+      const char *sequence = 0;
+      linux_key_extended = 0;
+      if (ata_budget && ata_budget->full) {
+        if (scan == 0x48) sequence = "\033[A";
+        if (scan == 0x50) sequence = "\033[B";
+        if (scan == 0x4d) sequence = "\033[C";
+        if (scan == 0x4b) sequence = "\033[D";
+        if (scan == 0x47) sequence = "\033[H";
+        if (scan == 0x4f) sequence = "\033[F";
+        if (scan == 0x53) sequence = "\033[3~";
+      }
+      if (sequence) while (*sequence) uart_push((u8)*sequence++);
       return 0;
     }
     if (scan == 170 || scan == 182) {
@@ -820,9 +929,25 @@ static int poll_host(void) {
     }
     if (!c)
       return 0;
+    if (linux_key_ctrl && c >= 'a' && c <= 'z')
+      c = c - 'a' + 1;
   }
-  if (c == 27)
+  if (c == 27) {
+    if (ata_budget && ata_budget->full) {
+      uart_push(27);
+      return 0;
+    }
     return 1;
+  }
+  if (c > 0 && c < 32 && c != '\n' && c != '\b') {
+    uart_push((u8)c);
+    if (c == 3 || c == 21) {
+      host_ln = 0;
+      host_line[0] = 0;
+      if (face_on) face_sync("");
+    }
+    return 0;
+  }
   if (c == '\b') {
     if (host_ln)
       host_line[--host_ln] = 0;
@@ -881,7 +1006,7 @@ struct LinuxSlot {
   u64 gpr[GPR_N];
   unsigned uart_ln, uart_rr, uart_wc, host_ln;
   u8 uart_ier, uart_lcr, uart_mcr, uart_scr, uart_dll, uart_dlh;
-  u8 uart_rx[64];
+  u8 uart_rx[4096];
   char uart_line[120];
   char host_save[48];
   u8 ata_err, ata_count, ata_lba0, ata_lba1, ata_lba2, ata_drive;
@@ -889,9 +1014,9 @@ struct LinuxSlot {
   int ata_drq, ata_write, ata_error;
   u8 ata_sector[512];
   u8 vmcb[4096];
+  u8 fpu[512];
 };
 static struct LinuxSlot linux_slot[LINUX_SLOTS];
-static int linux_cur = -1;
 static int linux_switch_to = -1;
 static char linux_requested[LINUX_SLOTS][16];
 static int linux_requested_n;
@@ -926,6 +1051,7 @@ static void linux_capture(int i, u64 *gpr) {
   if (gpr)
     memcpy(s->gpr, gpr, sizeof s->gpr);
   memcpy(s->vmcb, svm_vmcb, sizeof s->vmcb);
+  memcpy(s->fpu, linux_fpu, sizeof s->fpu);
   s->online = linux_saw_online;
   s->uart_ln = uart_ln;
   s->uart_rr = uart_rr;
@@ -955,6 +1081,7 @@ static void linux_capture(int i, u64 *gpr) {
 static void linux_restore(int i) {
   struct LinuxSlot *s = &linux_slot[i];
   memcpy(svm_vmcb, s->vmcb, sizeof s->vmcb);
+  memcpy(linux_fpu, s->fpu, sizeof s->fpu);
   linux_saw_online = s->online;
   uart_ln = s->uart_ln;
   uart_rr = s->uart_rr;
@@ -1039,6 +1166,11 @@ static int run_linux_once(const struct GuestBudget *b, int resume) {
     memset(svm_hsave, 0, sizeof svm_hsave);
     program_vmcb(b, vm, rip);
     memset(gpr, 0, sizeof gpr);
+    memset(linux_fpu, 0, sizeof linux_fpu);
+    linux_fpu[0] = 0x7f;
+    linux_fpu[1] = 3;
+    linux_fpu[24] = 0x80;
+    linux_fpu[25] = 0x1f;
     gpr[GPR_RSI] = 0x10000;
   } else {
     /* The Linux NPT is shared scratch space. Rebind it to this slot before
@@ -1061,7 +1193,7 @@ static int run_linux_once(const struct GuestBudget *b, int resume) {
   host_msr[5] = rdmsr(0xC0000101);
   host_msr[6] = rdmsr(0xC0000102);
   for (;;) {
-    if (++exits > 30000000u)
+    if (++exits > 30000000u && !(b->full && linux_saw_online))
       return STOP_BUDGET;
     wrmsr(0xC0000081, vm->save.star);
     wrmsr(0xC0000082, vm->save.lstar);
@@ -1070,6 +1202,7 @@ static int run_linux_once(const struct GuestBudget *b, int resume) {
     wrmsr(0xC0000100, vm->save.fs.base);
     wrmsr(0xC0000101, vm->save.gs.base);
     wrmsr(0xC0000102, vm->save.kernel_gs_base);
+    linux_interrupts(vm);
     linux_vmrun((u64)vm, gpr);
     wrmsr(0xC0000081, host_msr[0]);
     wrmsr(0xC0000082, host_msr[1]);
@@ -1089,7 +1222,11 @@ static int run_linux_once(const struct GuestBudget *b, int resume) {
       u64 info = vm->control.exit_info_1;
       u32 size = (u32)((info >> 4) & 7);
       u16 port = (u16)((info >> 16) & 0xffff);
-      if ((info & 4) == 0)
+      if (info & 4) {
+        if (!size || size > 4 || !linux_string_io(b, vm, gpr, info, size, port))
+          return STOP_FAULT;
+        continue;
+      } else
         port_access(vm, size, port, (int)(info & 1));
       advance_io(b, vm);
       continue;
@@ -1100,6 +1237,7 @@ static int run_linux_once(const struct GuestBudget *b, int resume) {
     }
     if (vm->control.exit_code == 0x78) {
       vm->save.rip += 1;
+      vm->control.int_state = 0;
       /* After /init is up, an idle HLT is not the session ending. */
       if ((vm->save.rflags & 0x200) == 0 && !linux_saw_online && ++halts > 1000)
         return STOP_FAULT;
@@ -1150,7 +1288,7 @@ static void linux_status_line(void) {
   }
   say("Hypervisor: ");
   number((u32)n);
-  line(" Linux kernels. Each has 48 MiB RAM and 16 MiB disk. The 2 MiB build guest is separate.");
+  line(" Linux kernels. Private RAM and disks. The 2 MiB build guest is separate.");
 }
 static void linux_release(int slot, const char *msg) {
   char name[16];
@@ -1233,7 +1371,7 @@ static int linux_session(int slot, int resume) {
 static int linux_slot_new(const char *name, struct GuestBudget *b) {
   u64 base, sink;
   int i;
-  const u64 slice = 64ULL << 20;
+  const u64 slice = LINUX_SLOT_BYTES;
   if (!linux_geometry(&base, &sink))
     return -1;
   for (i = 0; i < LINUX_SLOTS; i++)
@@ -1243,7 +1381,8 @@ static int linux_slot_new(const char *name, struct GuestBudget *b) {
     line("Four kernels are already running. Stop one with nix.");
     return -1;
   }
-  if (base + ((u64)i + 1) * slice > sink) {
+  if (base + ((u64)i + 1) * slice > sink ||
+      base + ((u64)i + 1) * slice > LINUX_TEMPLATE_ADDR) {
     line("Not enough is free for another kernel. It was not started.");
     return -1;
   }
@@ -1251,10 +1390,12 @@ static int linux_slot_new(const char *name, struct GuestBudget *b) {
   linux_slot[i].used = 1;
   copy(linux_slot[i].name, name ? name : "linux", 16);
   b->origin = base + (u64)i * slice;
-  b->ram_bytes = 48ULL << 20;
-  b->disk_bytes = 16ULL << 20;
+  b->full = linux_rootfs_ready();
+  b->ram_bytes = (b->full ? 512ULL : 48ULL) << 20;
+  b->disk_bytes = (b->full ? 64ULL : 16ULL) << 20;
   b->sink = sink;
   linux_slot[i].budget = *b;
+  linux_devices_reset(i);
   return i;
 }
 static void linux_guest_enter(const char *name) {
@@ -1270,6 +1411,12 @@ static void linux_guest_enter(const char *name) {
   }
   if (!linux_machine_ok())
     return;
+#if LINUX_FULL_INITRD_BYTES > 0 || defined(LINUX_REQUIRE_USERSPACE)
+  if (!linux_rootfs_ready()) {
+    line("The full Linux userspace template is not loaded. Start with scripts/run.sh.");
+    return;
+  }
+#endif
   slot = linux_slot_new(name, &budget);
   if (slot < 0)
     return;

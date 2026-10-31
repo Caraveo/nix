@@ -857,7 +857,9 @@ static void execute(char *s) {
     line("Core 0.3 / x86-64 long mode / ring-3 pods / cooperative scheduling");
     line(net_present()
              ? "QEMU phenom / AMD SVM build guest / PS/2 + ATA / RTL8139"
-             : "QEMU phenom / AMD SVM build guest / PS/2 + ATA / no NIC");
+             : linux_network_present()
+                   ? "QEMU phenom / AMD SVM / PS/2 + ATA / per-intent network adapters"
+                   : "QEMU phenom / AMD SVM build guest / PS/2 + ATA / no NIC");
     say("Committed generation: ");
     number(store.generation);
     line("");

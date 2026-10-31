@@ -17,7 +17,10 @@ from memory import BANK_SIZE, decode, read_disk
 
 class VM:
     def __init__(self, disk, work, model=None, capture_boot=None, extra=None, memory=None,
-                 kernel=True, boot_timeout=15):
+                 kernel=True, boot_timeout=15, serial_log=None):
+        self.serial_log = Path(serial_log) if serial_log else None
+        if self.serial_log:
+            self.serial_log.write_bytes(b'')
         self.qmp_path = str(work / 'qmp.sock')
         Path(self.qmp_path).unlink(missing_ok=True)
         drive = ['-drive', f'file={disk},format=raw,if=ide,index=0'] if disk else []
@@ -75,6 +78,11 @@ class VM:
                 if not chunk:
                     raise AssertionError(self.process.stderr.read().decode())
                 self.output += chunk
+                if self.serial_log:
+                    with self.serial_log.open('ab') as log:
+                        log.write(chunk)
+                if b'Kernel panic - not syncing:' in self.output:
+                    raise AssertionError('Linux guest panicked; see captured serial output')
         before, self.output = self.output.split(target, 1)
         return before
 

@@ -397,7 +397,9 @@ static int net_dhcp(void) {
 }
 static void net_show(void) {
   if (!nic_open()) {
-    line("No network device is attached.");
+    line(linux_network_present()
+             ? "Networking is available inside Linux intent tabs. Run curl, wget, or ping there."
+             : "No network device is attached.");
     return;
   }
   say("RTL8139 ");

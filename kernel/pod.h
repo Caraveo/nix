@@ -836,7 +836,8 @@ static void show_plan(void) {
   if (plan_mode == 1) {
     say("  ask: open Linux 7.3.1 inside NIX as #");
     line(plan_clone[0] ? plan_clone : "kernel");
-    line("  suggest: guest kernel only. NIX stays the host");
+    line(linux_rootfs_ready() ? "  suggest: full Linux runtime for this intent. NIX stays the host"
+                             : "  suggest: guest kernel only. NIX stays the host");
   } else if (plan_mode == 2) {
     say("  ask: install ");
     say(plan_clone);
@@ -851,7 +852,9 @@ static void show_plan(void) {
     line("  storage: 10 GiB install disk is attached");
   else
     line("  storage: an install needs 10 GiB");
-  line("  network: denied");
+  line((plan_mode == 1 || plan_mode == 2) && linux_rootfs_ready()
+           ? "  network: per-intent adapter when attached by the launcher"
+           : "  network: denied");
   if (plan_has_grant) {
     say("  memories: ");
     say(store.books[plan_grant].title);

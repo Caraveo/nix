@@ -13,6 +13,13 @@ command -v "$CC" >/dev/null || { echo 'Install Xcode command line tools: xcode-s
 command -v "$LD" >/dev/null || { echo 'Install linker: brew install lld'; exit 1; }
 mkdir -p build
 KFLAGS='--target=x86_64-unknown-none-elf -ffreestanding -fno-delete-null-pointer-checks -fno-pic -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mno-red-zone -msse2 -mfpmath=sse -ffp-contract=off -O2 -Wall -Wextra -Werror -nostdlib -fno-builtin'
+if [ -f build/linux/userspace.cpio.gz ]; then
+  userspace_bytes=$(wc -c < build/linux/userspace.cpio.gz | tr -d ' ')
+  KFLAGS="$KFLAGS -DLINUX_FULL_INITRD_BYTES=$userspace_bytes"
+fi
+if [ -f build/linux/full-kernel.ready ]; then
+  KFLAGS="$KFLAGS -DLINUX_REQUIRE_USERSPACE=1"
+fi
 UFLAGS='--target=x86_64-unknown-none-elf -ffreestanding -fno-delete-null-pointer-checks -fno-pic -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -mno-red-zone -O2 -Wall -Wextra -Werror -nostdlib -fno-builtin'
 UCFLAGS="$UFLAGS -mgeneral-regs-only -std=c11"
 "$CC" $UFLAGS -c user/start.S -o build/user_start.o

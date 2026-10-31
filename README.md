@@ -12,6 +12,8 @@ A bootable first slice of the [NIX blueprint](https://core-nix.com/): a prompt-f
 
 The intended NIX system combines the machine startup role of UEFI/BIOS with the operating system in one environment owned by dios. NIX owns the machine; Linux kernels are optional guest instances copied from a built template. The current implementation enters through Multiboot. A native UEFI startup path and physical hardware boot remain future work.
 
+NIX virtualizes **intents**. An intent can be a full operating system, container, pod, service, application, game, or another workload. A kernel is an execution mechanism for an intent; NIX owns the intent's resources, lifecycle, and interface. These workload types describe the intended model, not a claim that every runtime is implemented today.
+
 ## NIX running in QEMU
 
 ![NIX Core 0.2 Home running in a QEMU window on an Intel Mac](docs/screenshots/home-ai.png)
@@ -20,10 +22,10 @@ The intended NIX system combines the machine startup role of UEFI/BIOS with the 
 
 | Detail | Core 0.3 |
 | --- | --- |
-| Stage | Long-mode kernel with one native pod and one hypervisor build guest |
+| Stage | NIX host, native pods, build guest, and up to four Linux intent runtimes |
 | Kernel | Freestanding C and assembly; x86-64 long mode; ring-3 pods; cooperative, interrupts masked |
 | Tested host | Intel Mac running QEMU 11.1.3 |
-| Virtual machine | `-machine pc,accel=tcg -cpu phenom`, 512 MiB RAM, std VGA, IDE, PS/2, no NIC |
+| Virtual machine | `-machine pc,accel=tcg -cpu phenom`, 8 GiB windowed / 512 MiB headless, std VGA, IDE, PS/2; per-intent networking in full mode |
 | Display | 1024 × 768 framebuffer, rounded panels and tab, Ghost-inspired Light interface, Hack typography |
 | Input | PS/2 keyboard and mouse; software pointer; clickable Home shortcuts and toolbar |
 | Home | Local AI answers in plain language, deterministic writing and Memories, Ghost on request |
@@ -84,9 +86,18 @@ brew install qemu lld
 ./scripts/run.sh
 ```
 
-Run these commands from this repository. You can also double-click `Run-NIX.command` after installing dependencies. The first run builds `build/core.elf` and creates a **4 MiB** `build/memories.img`. Later runs preserve that disk. QEMU uses TCG and `-cpu phenom` because this QEMU's TCG can execute AMD SVM and cannot execute Intel VMX. The windowed virtual machine has 8 GiB RAM and a separate sparse 10 GiB install disk on IDE slave. Headless mode uses 512 MiB RAM. Both have no network device. NIX requires 8 GiB of memory; 10 GiB is the minimum install disk size. This QEMU build has no user-mode network backend. Catalog `fetch` stays denied. The host does not need nested virtualization. The bundled model is loaded as an immutable Multiboot module, separate from the persistent Memories disk. The boot stub copies that module to 256 MiB before it clears kernel memory, which is what keeps the weights intact. A boot without the bundle leaves local AI off.
+Run these commands from this repository. You can also double-click `Run-NIX.command` after installing dependencies. The first run builds `build/core.elf` and creates a **4 MiB** `build/memories.img`. Later runs preserve that disk. QEMU uses TCG and `-cpu phenom` because this QEMU's TCG can execute AMD SVM and cannot execute Intel VMX. The windowed virtual machine has 8 GiB RAM and a separate sparse 10 GiB install disk on IDE slave. Headless mode uses 512 MiB RAM. Headless mode has no network device. With the full Linux template prepared, windowed mode attaches four separate PIO network adapters with private NAT backends, one per Linux intent. NIX requires 8 GiB of memory; 10 GiB is the minimum install disk size. QEMU needs its user network backend (libslirp) for this mode. Catalog `fetch` stays denied. The host does not need nested virtualization. The bundled model is loaded as an immutable Multiboot module, separate from the persistent Memories disk. The boot stub copies that module to 256 MiB before it clears kernel memory, which is what keeps the weights intact. A boot without the bundle leaves local AI off.
 
-The built Linux 7.3.1 image is a reusable template: each new kernel instance copies it into private RAM, with its own 48 MiB RAM, 16 MiB guest disk, and saved CPU state. `ask kernel`, then `y`, opens `#kernel`. `ask kernel again` opens `#kernel0`, then `#kernel1`; `ask kernel -n linux` opens `#linux`. Up to four guests can stay open. Click Prompt, Terminal, or a kernel tab to switch; guests pause when left. Type `nix` and Enter to close the selected guest. A repeated name without an explicit replacement request is preserved. The guest has a small shell, not a distribution root or package manager.
+The built Linux 7.3.1 image is a reusable template: each new kernel instance copies it into private RAM, with its own RAM, guest disk, and saved CPU/FPU/device state. Full userspace instances receive 512 MiB RAM and a 64 MiB scratch disk; the compact fallback keeps 48 MiB RAM and 16 MiB disk. `ask kernel`, then `y`, opens `#kernel`. `ask kernel again` opens `#kernel0`, then `#kernel1`; `ask kernel -n linux` opens `#linux`. Up to four guests can stay open. Click Prompt, Terminal, or a kernel tab to switch; guests pause when left. Type `nix` and Enter to close the selected guest. A repeated name without an explicit replacement request is preserved. The original compact diagnostic build has a small shell. After preparing the full runtime, the userspace archive is required; an absent template produces a launch message instead of starting an incomplete guest. With the full template, it runs Debian userspace with Bash, curl, wget, ping, Python, Git, apt, and standard Linux utilities. Names such as `#ubuntu` label instances of the same prepared template; they do not select a different distribution. Files and packages in these RAM-backed instances disappear when the tab closes.
+
+Prepare the full Linux intent runtime with Docker running:
+
+```sh
+sh scripts/linux-runtime.sh
+./scripts/run.sh
+```
+
+The userspace archive is loaded once at a reserved host RAM address and copied into each new guest. The kernel image and userspace archive are reusable templates; a new tab does not rebuild Linux or install packages on the Mac. `tests/linuxfull.py` checks real programs, downloads, DNS, and HTTPS inside NIX. The catalog command `fetch` retains its separate deny policy.
 
 Click inside QEMU to type. Release captured input with **Control + Option + G** (QEMU's macOS grab shortcut), or close its window to quit. Use `die` (or its `shutdown` alias) and confirm with `y` for a clean exit. `n` cancels. Use `boot` to restart the guest. For a serial session in your Mac terminal:
 
