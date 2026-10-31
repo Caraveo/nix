@@ -229,6 +229,8 @@ static char key(void) {
     }
     if (extended) {
       extended = 0;
+      if (s == 0x49) face_scroll_by(FACE_VIEW);
+      if (s == 0x51) face_scroll_by(-FACE_VIEW);
       continue;
     }
     if (s == 42 || s == 54) {

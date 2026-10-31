@@ -110,6 +110,17 @@ static void label(int x, int y, const char *s, u32 fg, u32 bg) {
   for (; *s; s++, x += 12)
     glyph(x, y, *s, fg, bg);
 }
+static void console_label(int x, int y, const char *s, u32 fg, u32 bg) {
+  for (; *s; s++, x += 12) {
+    u8 c = (u8)*s;
+    if (c > 127) continue;
+    for (int j = 0; j < 18; j++)
+      for (int i = 0; i < 12; i++) {
+        u8 alpha = font_alpha[c][(j * 20 / 18) * 12 + i];
+        if (alpha) rect(x + i, y + j, 1, 1, blend(fg, bg, alpha));
+      }
+  }
+}
 static void draw_logo(int x, int y, const u8 *alpha, int w, int h,
                       u32 background) {
   for (int j = 0; j < h; j++)
@@ -231,11 +242,12 @@ static int face_on = 0;
 static int face_capture = 0;
 static int face_confirm = 0;
 static int face_linux = 0;
-enum { FACE_LOGS = 6, FACE_EXTRA = 4 };
-static char face_rows[12][78];
-static int face_rows_n, face_col, face_typed_n;
+enum { FACE_LOGS = 6, FACE_EXTRA = 4, FACE_VIEW = 24, FACE_HISTORY = 1024 };
+static char face_rows[FACE_HISTORY][78];
+static int face_rows_n, face_col, face_typed_n, face_scroll;
+static int face_log_scroll[FACE_LOGS];
 static char face_typed[48];
-static char face_log[FACE_LOGS][12][78];
+static char face_log[FACE_LOGS][FACE_HISTORY][78];
 static int face_log_n[FACE_LOGS];
 static int face_log_col[FACE_LOGS];
 static char face_log_typed[FACE_LOGS][48];
@@ -258,15 +270,23 @@ enum {
 };
 static void graphics_face_prompt(void);
 static void graphics_face_paint(void);
+static int face_total(void) {
+  return face_rows_n + (face_col > 0 && face_rows_n < FACE_HISTORY);
+}
+static int face_max_scroll(void) {
+  int n = face_total() - FACE_VIEW;
+  return n > 0 ? n : 0;
+}
 static void face_save(void) {
   int a = face_app;
   if (a < 0 || a >= FACE_LOGS)
     return;
-  if (face_rows_n < 12)
+  if (face_rows_n < FACE_HISTORY)
     face_rows[face_rows_n][face_col] = 0;
   face_log_n[a] = face_rows_n;
   face_log_col[a] = face_col;
-  for (int i = 0; i < 12; i++)
+  face_log_scroll[a] = face_scroll;
+  for (int i = 0; i < FACE_HISTORY; i++)
     copy(face_log[a][i], face_rows[i], 78);
   copy(face_log_typed[a], face_typed, 48);
   face_log_typed_n[a] = face_typed_n;
@@ -275,7 +295,8 @@ static void face_restore(void) {
   int a = face_app;
   face_rows_n = face_log_n[a];
   face_col = face_log_col[a];
-  for (int i = 0; i < 12; i++)
+  face_scroll = face_log_scroll[a];
+  for (int i = 0; i < FACE_HISTORY; i++)
     copy(face_rows[i], face_log[a][i], 78);
   copy(face_typed, face_log_typed[a], 48);
   face_typed_n = face_log_typed_n[a];
@@ -292,10 +313,11 @@ static void face_load(int app) {
 }
 static void face_clear(void) {
   face_rows_n = 0;
+  face_scroll = 0;
   face_col = 0;
   face_typed_n = 0;
   face_typed[0] = 0;
-  for (int i = 0; i < 12; i++)
+  for (int i = 0; i < FACE_HISTORY; i++)
     face_rows[i][0] = 0;
   face_save();
 }
@@ -324,21 +346,28 @@ static void face_close_app(const char *name) {
   int slot, from;
   if (i < 0)
     return;
+  face_save();
   slot = 2 + i;
   for (int j = i; j + 1 < face_extra_n; j++) {
     copy(face_extra_name[j], face_extra_name[j + 1], 16);
     from = 3 + j;
     face_log_n[2 + j] = face_log_n[from];
     face_log_col[2 + j] = face_log_col[from];
+    face_log_scroll[2 + j] = face_log_scroll[from];
     face_log_typed_n[2 + j] = face_log_typed_n[from];
-    for (int r = 0; r < 12; r++)
+    for (int r = 0; r < FACE_HISTORY; r++)
       copy(face_log[2 + j][r], face_log[from][r], 78);
     copy(face_log_typed[2 + j], face_log_typed[from], 48);
   }
   face_extra_n--;
-  if (face_app == slot || face_app >= 2 + face_extra_n)
-    face_load(0);
-  else if (face_on && pixels)
+  if (face_app == slot) {
+    face_app = 0;
+    face_restore();
+  } else if (face_app > slot) {
+    face_app--;
+    face_restore();
+  }
+  if (face_on && pixels)
     graphics_face_paint();
 }
 static void face_pill(int x, int y, int w, const char *icon, const char *text,
@@ -427,8 +456,21 @@ static void graphics_face_paint(void) {
     int y = 132;
     if (face_app != 0)
       rounded_rect(24, 120, 976, 476, 16, FACE_PROMPT);
-    for (int i = 0; i < face_rows_n && y <= 560; i++, y += 22)
-      label(36, y, face_rows[i], FACE_INK, paper);
+    int total = face_total();
+    int max_scroll = face_max_scroll();
+    if (face_scroll > max_scroll) face_scroll = max_scroll;
+    int first = total - FACE_VIEW - face_scroll;
+    if (first < 0) first = 0;
+    for (int i = first; i < total && i < first + FACE_VIEW; i++, y += 19)
+      console_label(36, y, face_rows[i], FACE_INK, paper);
+    if (max_scroll) {
+      int thumb = 456 * FACE_VIEW / total;
+      if (thumb < 16) thumb = 16;
+      int offset = (456 - thumb) * (max_scroll - face_scroll) / max_scroll;
+      rounded_rect(980, 132, 6, 456, 3, FACE_LINE);
+      rounded_rect(980, 132 + offset, 6, thumb, 3,
+                   face_scroll ? FACE_PEACH : FACE_MUTED);
+    }
     if (face_app >= 2 && !face_rows_n)
       label(36, 160, "Linux 7.3.1 console", FACE_MUTED, FACE_PROMPT);
   }
@@ -506,15 +548,35 @@ static void face_sync(const char *s) {
   face_typed_n = (int)i;
   graphics_face_arrow();
 }
-/* The console keeps 12 finished lines. A full log scrolls. It must not
-   drop the new characters and leave blank rows. */
-static void face_make_room(void) {
-  if (face_rows_n < 12)
+static void face_scroll_by(int lines) {
+  if (!face_on || !pixels) return;
+  int next = face_scroll + lines;
+  int max_scroll = face_max_scroll();
+  if (next < 0) next = 0;
+  if (next > max_scroll) next = max_scroll;
+  if (next == face_scroll) {
+    graphics_face_paint();
     return;
-  for (int i = 1; i < 12; i++)
+  }
+  face_scroll = next;
+  face_save();
+  graphics_face_paint();
+}
+static int face_scroll_click(int x, int y) {
+  if (!face_on || x < 972 || x >= 996 || y < 132 || y >= 588 ||
+      !face_max_scroll()) return 0;
+  int next = face_max_scroll() * (587 - y) / 455;
+  face_scroll_by(next - face_scroll);
+  return 1;
+}
+/* Each tab retains history independently and displays 24 lines. */
+static void face_make_room(void) {
+  if (face_rows_n < FACE_HISTORY)
+    return;
+  for (int i = 1; i < FACE_HISTORY; i++)
     copy(face_rows[i - 1], face_rows[i], 78);
-  face_rows[11][0] = 0;
-  face_rows_n = 11;
+  face_rows[FACE_HISTORY - 1][0] = 0;
+  face_rows_n = FACE_HISTORY - 1;
   face_col = 0;
 }
 static void face_note(char c) {
@@ -523,6 +585,7 @@ static void face_note(char c) {
   if (c == '\r' || c == '\b')
     return;
   if (c == '\n') {
+    if (face_scroll && !face_col) face_scroll++;
     face_make_room();
     face_rows[face_rows_n][face_col] = 0;
     face_rows_n++;
@@ -535,8 +598,9 @@ static void face_note(char c) {
     return;
   if (face_col >= 72)
     face_note('\n');
+  if (face_scroll && !face_col) face_scroll++;
   face_make_room();
-  if (face_rows_n >= 12)
+  if (face_rows_n >= FACE_HISTORY)
     return;
   face_rows[face_rows_n][face_col++] = c;
   face_rows[face_rows_n][face_col] = 0;

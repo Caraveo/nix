@@ -902,6 +902,10 @@ static int poll_host(void) {
     if (linux_key_extended) {
       const char *sequence = 0;
       linux_key_extended = 0;
+      if (key_shift && (scan == 0x49 || scan == 0x51)) {
+        face_scroll_by(scan == 0x49 ? FACE_VIEW : -FACE_VIEW);
+        return 0;
+      }
       if (ata_budget && ata_budget->full) {
         if (scan == 0x48) sequence = "\033[A";
         if (scan == 0x50) sequence = "\033[B";
@@ -910,6 +914,8 @@ static int poll_host(void) {
         if (scan == 0x47) sequence = "\033[H";
         if (scan == 0x4f) sequence = "\033[F";
         if (scan == 0x53) sequence = "\033[3~";
+        if (scan == 0x49) sequence = "\033[5~";
+        if (scan == 0x51) sequence = "\033[6~";
       }
       if (sequence) while (*sequence) uart_push((u8)*sequence++);
       return 0;

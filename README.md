@@ -99,6 +99,8 @@ sh scripts/linux-runtime.sh
 
 The userspace archive is loaded once at a reserved host RAM address and copied into each new guest. The kernel image and userspace archive are reusable templates; a new tab does not rebuild Linux or install packages on the Mac. `tests/linuxfull.py` checks real programs, downloads, DNS, and HTTPS inside NIX. The catalog command `fetch` retains its separate deny policy.
 
+Each console shows 24 lines and keeps 1,024 lines of scrollback per tab. Scroll with the mouse wheel or scrollbar; use Shift+PageUp/PageDown in Linux app tabs (PageUp/PageDown in Prompt and Terminal). Switching tabs preserves the scroll position.
+
 Click inside QEMU to type. Release captured input with **Control + Option + G** (QEMU's macOS grab shortcut), or close its window to quit. Use `die` (or its `shutdown` alias) and confirm with `y` for a clean exit. `n` cancels. Use `boot` to restart the guest. For a serial session in your Mac terminal:
 
 ```sh
