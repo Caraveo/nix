@@ -48,7 +48,7 @@ The planned division of responsibility gives the model room to propose while det
 
 The same distinction applies to online research. Local inference describes where the intelligence runs. A particular research task may still need information from the internet. The proposed experience keeps those decisions separate: the person can understand why a task needs a connection and decide whether to allow it. Working offline should remain a meaningful mode of operation.
 
-The current Core MVP contains a deterministic intent router. It does not include a local model or an operational AI agent. A usable system during model failure is part of the intended design, and the prototype begins by proving that basic interaction and saved work can exist independently of inference.
+Core 0.2 now includes a first local model experience: a small instruction-tuned model and its CPU inference engine run inside the operating-system guest. It can answer a plain-language request, and the person can cancel generation. Its answers remain suggestions; an operational agent that plans and executes tools is still work ahead. The deterministic writing, save, recovery, and terminal paths remain available independently of the model.
 
 ## Memories make the work the center
 
@@ -122,7 +122,7 @@ A more capable Author experience could add structure, revision, notes, and impor
 
 ### Introduce local understanding
 
-The next conceptual step is to make more requests understandable through local intelligence. The system should be able to ask a relevant question, propose an appropriate experience, and handle uncertainty openly.
+The first version of this phase is now present in Core 0.2, which runs a small model locally for plain-language answers. The broader conceptual step is to make more requests understandable through local intelligence. The system should be able to ask a relevant question, propose an appropriate experience, and handle uncertainty openly.
 
 That phase also needs to prove the boundaries around inference. A model should receive the context selected for its task, operate within the machine's resource limits, and leave the basic system usable if it stops responding or produces an unsuitable suggestion. Better understanding has to arrive alongside dependable control.
 

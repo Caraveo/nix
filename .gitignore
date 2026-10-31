@@ -3,3 +3,11 @@ exports/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Model weights are verified downloads, not ordinary Git blobs.
+models/*.safetensors
+models/*.bin
+models/tokenizer.json
+models/config.json
+models/.venv/
+models/*.part

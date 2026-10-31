@@ -16,14 +16,15 @@ from memory import BANK_SIZE, decode, read_disk
 
 
 class VM:
-    def __init__(self, disk, work):
+    def __init__(self, disk, work, model=None):
         self.qmp_path = str(work / 'qmp.sock')
         Path(self.qmp_path).unlink(missing_ok=True)
         drive = ['-drive', f'file={disk},format=raw,if=ide,index=0'] if disk else []
+        model_args=['-initrd',str(model)] if model else []
         self.process = subprocess.Popen([
-            str(ROOT/'scripts/qemu.sh'), '-machine', 'pc,accel=tcg', '-m', '64M',
+            str(ROOT/'scripts/qemu.sh'), '-machine', 'pc,accel=tcg', '-m', '512M' if model else '64M',
             '-vga', 'std', '-kernel', str(ROOT / 'build/core.elf'),
-            *drive,
+            *drive, *model_args,
             '-nic', 'none', '-display', 'none', '-serial', 'stdio',
             '-monitor', 'none', '-qmp', f'unix:{self.qmp_path},server=on,wait=off',
             '-no-reboot'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,

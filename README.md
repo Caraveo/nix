@@ -1,8 +1,8 @@
 ![NIX — The Prompt Operating System](assets/brand/NIX%20prompt%20operating%20system%20banner.png)
 
-# NIX / Core 0.1
+# NIX / Core 0.2
 
-**Version 0.1 · Early bootable MVP · Intel Mac / QEMU**
+**Version 0.2 · Early bootable MVP · Intel Mac / QEMU**
 
 [**Why Nix?**](marketing.md) — The story, the experience, and the conceptual phases behind the project.
 
@@ -12,31 +12,63 @@ A bootable first slice of the [NIX blueprint](https://core-nix.com/): a prompt-f
 
 ## NIX running in QEMU
 
-![NIX Core 0.1 Home running in a QEMU window on an Intel Mac](docs/screenshots/home.png)
+![NIX Core 0.2 Home running in a QEMU window on an Intel Mac](docs/screenshots/home-ai.png)
 
-*Core 0.1 running in QEMU: rounded interface corners, a visible mouse pointer, prompt-first Home, Author entry points, and local Memories. Updated October 30, 2026. [Original macOS window capture](docs/screenshots/nix-core-0.1-qemu.png).*
+*Core 0.2 running in QEMU: rounded interface corners, a visible mouse pointer, prompt-first Home, Author entry points, and local Memories. Updated October 30, 2026. [Original macOS window capture](docs/screenshots/nix-core-0.1-qemu.png).*
 
-| Detail | Core 0.1 |
+| Detail | Core 0.2 |
 | --- | --- |
 | Stage | Early bootable operating-system prototype |
 | Kernel | Freestanding C and assembly; 32-bit x86 protected mode; single address space |
 | Tested host | Intel Mac running QEMU 11.1.3 |
-| Virtual machine | Emulated x86 PC, TCG software acceleration, 64 MiB RAM |
+| Virtual machine | Emulated x86 PC, TCG software acceleration, 512 MiB RAM |
 | Display | 1024 × 768 framebuffer, rounded panels and tab, Ghost-inspired Light interface, Hack typography |
 | Input | PS/2 keyboard and mouse; software pointer; clickable Home shortcuts and toolbar |
-| Home | Deterministic intent routing; writing and Memories; Ghost opens on request |
+| Home | Local AI answers in plain language, deterministic writing and Memories, Ghost on request |
+| Local AI | SmolLM2-135M-Instruct; Q8 weights; SSE2 CPU inference inside Core; 256-token context; 48-token response cap |
 | Author | Four manuscripts; up to 4095 bytes each; append, read, undo, save, and reopen |
 | Persistence | 4 MiB virtual disk; alternating checksummed snapshots; previous-version recovery; text export |
 | Terminal | Ghost Core edition: Memory commands, quoting, command chains, and persistent appends |
 | Connectivity | No virtual network device attached |
 | Verified behavior | Boot, keyboard input, save/restart, corruption recovery, Ghost commands, export, and missing-disk handling |
-| Future work | Local AI, process isolation, full Ghost process/PTY support, x86-64, broader drivers, and isolated Pods |
+| Future work | Multi-turn AI context, validated tool plans, process isolation, full Ghost process/PTY support, x86-64, broader drivers, and isolated Pods |
 
 This version demonstrates the first working slice of NIX. The full operating-system vision and its conceptual phases are described in [Why Nix?](marketing.md).
 
 ### Ghost Core edition
 
 ![Ghost terminal running inside Core in QEMU](docs/screenshots/ghost.png)
+
+## Local AI is inside Core
+
+![A language model answering inside the NIX QEMU guest](docs/screenshots/ai.png)
+
+**Core 0.2 bundles SmolLM2-135M-Instruct with an in-guest CPU inference engine.**
+Ask an ordinary question at Home, or use `ask <question>`. `ai status` shows the
+loaded model. Escape cancels generation. The launcher attaches the verified
+132 MiB model boot module automatically when present; the guest has no network
+device and needs no host model server or API key.
+
+[Download Core 0.2 with the model included](https://github.com/Caraveo/nix/releases/tag/v0.2)
+for a prebuilt QEMU package. From a fresh source checkout, prepare the model once:
+
+```sh
+./scripts/setup-model.sh
+./scripts/run.sh
+```
+
+The prepared development workspace already contains the downloaded model. Setup
+requires internet access to fetch the pinned Apache-2.0 weights and conversion
+tools; subsequent launches and inference work offline. Source checkouts without
+the bundle still boot with deterministic commands and an explicit model-not-loaded
+status. Weights are distributed with the release rather than ordinary Git history.
+
+This is a small model with limited reasoning ability. It can misunderstand requests
+and hallucinate. Replies are suggestions, **not executable commands**: the model
+cannot invoke Ghost, modify Memories, or install software. Each request starts a
+fresh user context; multi-turn chat history and Memory retrieval are future work.
+Input is ASCII, total context is 256 tokens, and replies stop after 48 tokens.
+See [model provenance, setup, architecture, tests, and limits](models/README.md).
 
 ## Run on an Intel Mac
 
@@ -48,7 +80,7 @@ brew install qemu lld
 ./scripts/run.sh
 ```
 
-Run these commands from this repository. You can also double-click `Run-NIX.command` after installing dependencies. The first run builds `build/core.elf` and creates a **4 MiB** `build/memories.img`. Later runs preserve that disk. QEMU uses software emulation (TCG) for reliable protected-mode boot; no HVF or nested virtualization is required. The virtual machine has 64 MiB RAM and no network device.
+Run these commands from this repository. You can also double-click `Run-NIX.command` after installing dependencies. The first run builds `build/core.elf` and creates a **4 MiB** `build/memories.img`. Later runs preserve that disk. QEMU uses software emulation (TCG) for reliable protected-mode boot; no HVF or nested virtualization is required. The virtual machine has 512 MiB RAM and no network device. The bundled model is loaded as an immutable Multiboot module, separate from the persistent Memories disk.
 
 Click inside QEMU to type. Release captured input with **Control + Option + G** (QEMU's macOS grab shortcut), or close its window to quit. Use `shutdown` from NIX Home for a clean exit. For a serial session in your Mac terminal:
 
@@ -142,6 +174,6 @@ remote run failed during workflow startup before creating any test jobs.
 
 ## Boundary of this MVP
 
-Implemented: boot, Ghost-style framebuffer interface, prompt routing, writing workspace, explicit save, restart persistence, previous-generation recovery, host text export, serial diagnostics, and the Ghost terminal port.
+Implemented: boot, Ghost-style framebuffer interface, rounded corners, PS/2 mouse, local model loading and CPU inference, plain-language AI answers with cancellation, deterministic intent routing, writing workspace, explicit save, restart persistence, previous-generation recovery, host text export, serial diagnostics, and the Ghost terminal port.
 
-Still needed for the full blueprint: x86-64 long mode, Rust components, paging/process isolation, scheduler/IPC/capabilities, UEFI boot, window compositor, local model inference/OpenCode, real isolated Pods, networking, USB/NVMe, guest virtualization, accelerated graphics and games. All code currently executes at kernel privilege in one address space with interrupts disabled and polled I/O. The Author workspace is a built-in application, not an isolated Pod. No AI model or automatic code generation is included. The interface supports a PS/2 pointer and selected click targets; window dragging, resizing, and arbitrary text selection are not implemented.
+Still needed for the full blueprint: x86-64 long mode, Rust components, paging/process isolation, scheduler/IPC/capabilities, UEFI boot, window compositor, larger-model support/OpenCode integration, real isolated Pods, networking, USB/NVMe, guest virtualization, accelerated graphics and games. All code currently executes at kernel privilege in one address space with interrupts disabled and polled I/O. The Author workspace is a built-in application, not an isolated Pod. The model is bundled separately as a verified boot module. Autonomous tool execution and automatic code generation are not implemented. The interface supports a PS/2 pointer and selected click targets; window dragging, resizing, and arbitrary text selection are not implemented.

@@ -1,4 +1,4 @@
-/* Core 0.1: freestanding, single-address-space x86 prototype. */
+/* Core 0.2: freestanding, single-address-space x86 prototype. */
 typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
@@ -50,12 +50,6 @@ static int starts(const char *a, const char *b) {
       return 0;
   return 1;
 }
-static int has(const char *a, const char *b) {
-  for (; *a; a++)
-    if (starts(a, b))
-      return 1;
-  return 0;
-}
 static void copy(char *d, const char *s, u32 cap) {
   u32 i = 0;
   while (i + 1 < cap && s[i]) {
@@ -67,6 +61,7 @@ static void copy(char *d, const char *s, u32 cap) {
 #include "framebuffer.h"
 #include "mouse.h"
 static int home_visible = 0;
+static int key_shift = 0;
 static const char *mouse_action(int x, int y);
 static char mouse_pending[64];
 static u16 shadow[2000];
@@ -108,6 +103,7 @@ static void cursor(void) {
 static void scroll(void) {
   if (row < 23)
     return;
+  home_visible = 0;
   for (int y = 3; y < 22; y++)
     for (int x = 0; x < 80; x++)
       cell(x, y, (char)vga[(y + 1) * 80 + x], (u8)(vga[(y + 1) * 80 + x] >> 8));
@@ -164,7 +160,7 @@ static void screen(const char *view) {
   graphics_chrome(starts(view, "GHOST") ? "shell" : "nix / Core");
   if (!pixels)
     bar(0,
-        "n i x     /     C O R E                                     MVP 0.1",
+        "n i x     /     C O R E                                     MVP 0.2",
         0x70);
   bar(1, view, 0x70);
   bar(24, "PROMPT FIRST     /     LOCAL STORAGE     /     NETWORK DISCONNECTED",
@@ -176,7 +172,7 @@ static void screen(const char *view) {
   cursor();
 }
 static char key(void) {
-  static int shift = 0, extended = 0;
+  static int extended = 0;
   static const char normal[128] = {
       [1] = 27,    [2] = '1',  [3] = '2',   [4] = '3',   [5] = '4',
       [6] = '5',   [7] = '6',  [8] = '7',   [9] = '8',   [10] = '9',
@@ -226,17 +222,17 @@ static char key(void) {
       continue;
     }
     if (s == 42 || s == 54) {
-      shift = 1;
+      key_shift = 1;
       continue;
     }
     if (s == 170 || s == 182) {
-      shift = 0;
+      key_shift = 0;
       continue;
     }
     if (s & 128)
       continue;
     char c = normal[s];
-    if (shift) {
+    if (key_shift) {
       if (c >= 'a' && c <= 'z')
         c -= 32;
       else if (shifted[s])
@@ -419,13 +415,15 @@ fail:
   s->checksum = oldhash;
   return 0;
 }
+#include "ai/interface.h"
 static void home(void) {
   screen("HOME  /  What would you like to do?");
   color = 0xf3;
   line("Hi. Welcome to Nix.");
   color = 0xf0;
   line("Your intent is the starting point.");
-  line("");
+  line(ai.ready ? "Local AI online / SmolLM2 135M / ask in plain language"
+                : "Local AI not loaded / deterministic commands available");
   line("  write a book called My Story    Create an Author workspace");
   line("  open My Story                  Continue a manuscript");
   line("  show my memories               Browse saved writing");
@@ -560,6 +558,16 @@ static void execute(char *s) {
     dirty = 1;
     return;
   }
+  if (starts(lower, "ask ")) {
+    ai_answer(s + 4);
+    return;
+  }
+  if (eq(lower, "ai status")) {
+    line(ai.ready ? "SmolLM2-135M-Instruct / Q8 / 256-token context / 48-token "
+                    "responses / in-guest CPU"
+                  : "No model boot module loaded.");
+    return;
+  }
   if (eq(lower, "home") || eq(lower, "clear")) {
     home();
     return;
@@ -568,7 +576,10 @@ static void execute(char *s) {
     line("Intent examples: write a book / write a book called <title>");
     line("open <title> / show my memories / home / status / shutdown");
     line("Author: :save, :read, :undo, :home. Four books, 4095 bytes each.");
-    line("Ghost is the default terminal. No AI, desktop, games or wallet yet.");
+    line("Ask in plain language or use ask <question>. ai status shows the "
+         "model.");
+    line("Ghost is the default terminal. Desktop, games and wallet are not "
+         "implemented.");
     return;
   }
   if (eq(lower, "show my memories") || eq(lower, "memories")) {
@@ -576,12 +587,15 @@ static void execute(char *s) {
     return;
   }
   if (eq(lower, "status")) {
-    line("Core 0.1 / x86 protected mode / single address space / C + assembly");
-    line("64 MiB VM / framebuffer + PS/2 + serial + ATA PIO / offline");
+    line("Core 0.2 / x86 protected mode / single address space / C + assembly");
+    line("QEMU / framebuffer + PS/2 + serial + ATA PIO / offline");
     say("Committed generation: ");
     number(store.generation);
     line("");
-    line("Deterministic intent router. No model inference or isolation yet.");
+    line(ai.ready ? "Local SmolLM2 inference online. Process isolation is not "
+                    "implemented."
+                  : "Deterministic mode. Load a model boot bundle to enable "
+                    "local AI.");
     return;
   }
   if (eq(lower, "shutdown")) {
@@ -606,7 +620,8 @@ static void execute(char *s) {
     line("Memory not found. Try: show my memories");
     return;
   }
-  if (has(lower, "write") || has(lower, "author") || has(lower, "manuscript")) {
+  if (starts(lower, "write a book") ||
+      starts(lower, "i want to write a book") || eq(lower, "author")) {
     if (store.count == BOOKS) {
       line("All four Author slots are occupied. Open an existing Memory.");
       return;
@@ -635,20 +650,21 @@ static void execute(char *s) {
     line("Workspace created in RAM. Start writing, then :save.");
     return;
   }
-  if (has(lower, "diablo") || has(lower, "freelancer") || has(lower, "game")) {
+  if (starts(lower, "play ") || starts(lower, "i want to play ")) {
     line("Play needs a guest runtime, graphics drivers, and legal game media.");
     line("This Core MVP proves Author first; games are not implemented.");
     return;
   }
-  if (has(lower, "wallet") || has(lower, "bitcoin")) {
+  if (eq(lower, "wallet") || eq(lower, "bitcoin wallet") ||
+      starts(lower, "open wallet") ||
+      starts(lower, "i want a bitcoin wallet")) {
     line("Wallet is not implemented. Never enter keys or seed phrases here.");
     return;
   }
   if (*s)
-    line("Tell me: write a book, open <title>, show my memories, or help.");
+    ai_answer(s);
 }
 void kernel_main(u32 magic, u32 info) {
-  (void)info;
   outb(0x3f9, 0);
   outb(0x3fb, 0x80);
   outb(0x3f8, 1);
@@ -664,6 +680,7 @@ void kernel_main(u32 magic, u32 info) {
   if (graphics_init())
     vga = shadow;
   load();
+  ai_boot(info);
   home();
   mouse_init();
   for (;;) {

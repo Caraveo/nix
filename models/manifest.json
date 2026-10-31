@@ -1,0 +1,11 @@
+{
+  "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+  "license": "Apache-2.0",
+  "format": "NIXAI Q8 per-row symmetric v1",
+  "context_tokens": 256,
+  "source_sha256": "5af571cbf074e6d21a03528d2330792e532ca608f24ac70a143f6b369968ab8c",
+  "bundle_sha256": "8af334860e7f23bfc537ba30bdaa4d707065bdb85ee8351e5a9aeaa80e73853a",
+  "bundle_bytes": 138070032,
+  "tokenizer_sha256": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c"
+}

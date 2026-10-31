@@ -14,6 +14,15 @@ stack_top:
 _start:
  cli
  cld
+ # Floating-point inference uses SSE2; preserve Multiboot arguments in eax/ebx.
+ mov %cr0, %ecx
+ and $0xfffffff3, %ecx
+ or $2, %ecx
+ mov %ecx, %cr0
+ mov %cr4, %ecx
+ or $0x600, %ecx
+ mov %ecx, %cr4
+ fninit
  mov $stack_top, %esp
  xor %ebp, %ebp
  sub $8, %esp

@@ -121,7 +121,7 @@ static int ghost_builtin(struct GhostToken *t, int count) {
     return 0;
   }
   if (eq(cmd, "uname")) {
-    line("NIX Core 0.1 i686 / Ghost Core edition");
+    line("NIX Core 0.2 i686 / Ghost Core edition");
     return 0;
   }
   if (eq(cmd, "echo") || eq(cmd, "print")) {
