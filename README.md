@@ -1,4 +1,8 @@
+![NIX — The Prompt Operating System](assets/brand/NIX%20prompt%20operating%20system%20banner.png)
+
 # NIX / Core 0.1
+
+[**Why Nix?**](marketing.md) — The story, the experience, and the conceptual phases behind the project.
 
 A bootable first slice of the [NIX blueprint](https://core-nix.com/): a prompt-first environment and an Author workspace with persistent Memories. This repository's original `index.html` is the design reference.
 
